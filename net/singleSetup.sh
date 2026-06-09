@@ -19,14 +19,14 @@ fi
 
 NAME=$1
 
-brctl addbr br-$NAME
+sudo ip link add name br-$NAME type bridge
 
-tunctl -t tap-$NAME
+sudo ip tuntap add tap-$NAME mode tap
 
-ifconfig tap-$NAME 0.0.0.0 promisc up
+sudo ifconfig tap-$NAME 0.0.0.0 promisc up
 
-brctl addif br-$NAME tap-$NAME
-ifconfig br-$NAME up
+sudo ip link set tap-$NAME master br-$NAME
+sudo ifconfig br-$NAME up
 
 # pushd /proc/sys/net/bridge
 # for f in bridge-nf-*; do echo 0 > $f; done

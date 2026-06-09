@@ -163,7 +163,7 @@ main (int argc, char *argv[])
   //
 //  NS_LOG_UNCOND ("Creating wifi");
   WifiHelper wifi;
-  wifi.SetStandard (WIFI_PHY_STANDARD_80211a);
+  wifi.SetStandard (WIFI_STANDARD_80211a);
   wifi.SetRemoteStationManager ("ns3::ConstantRateWifiManager", "DataMode", StringValue ("OfdmRate54Mbps"));
 
   //
@@ -178,7 +178,7 @@ main (int argc, char *argv[])
   //
 //  NS_LOG_UNCOND ("Configuring physical layer");
   YansWifiChannelHelper wifiChannel = YansWifiChannelHelper::Default ();
-  YansWifiPhyHelper wifiPhy = YansWifiPhyHelper::Default ();
+  YansWifiPhyHelper wifiPhy = YansWifiPhyHelper ();
   wifiPhy.SetChannel (wifiChannel.Create ());
 
   //
@@ -298,4 +298,3 @@ main (int argc, char *argv[])
   // Exit the MPI execution environment
 //  MpiInterface::Disable ();
 }
-

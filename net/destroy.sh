@@ -1,10 +1,10 @@
-ifconfig br-left down
-ifconfig br-right down
-brctl delif br-left tap-left
-brctl delif br-right tap-right
-brctl delbr br-left
-brctl delbr br-right
-ifconfig tap-left down
-ifconfig tap-right down
-tunctl -d tap-left
-tunctl -d tap-right
+sudo ifconfig br-left down
+sudo ifconfig br-right down
+sudo ip link set tap-left nomaster
+sudo ip link set tap-right nomaster
+sudo ip link del br-left
+sudo ip link del br-right
+sudo ifconfig tap-left down
+sudo ifconfig tap-right down
+sudo ip link del tap-left
+sudo ip link del tap-right

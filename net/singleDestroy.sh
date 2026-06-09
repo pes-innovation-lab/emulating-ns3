@@ -11,12 +11,12 @@ fi
 
 NAME=$1
 
-ifconfig br-$NAME down
+sudo ifconfig br-$NAME down
 
-brctl delif br-$NAME tap-$NAME
+sudo ip link set tap-$NAME nomaster
 
-brctl delbr br-$NAME
+sudo ip link del br-$NAME
 
-ifconfig tap-$NAME down
+sudo ifconfig tap-$NAME down
 
-tunctl -d tap-$NAME
+sudo ip link del tap-$NAME

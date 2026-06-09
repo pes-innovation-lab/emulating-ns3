@@ -165,7 +165,7 @@ def create():
         print("NS3 up to date!")
         print("Go to NS3 folder, probably cd $NS3_HOME")
 
-    r_code = subprocess.call("cd $NS3_HOME && ./waf build -j {} -d optimized --disable-examples".format(jobs),
+    r_code = subprocess.call("cd $NS3_HOME && ./ns3 build -j {}".format(jobs),
                              shell=True)
     if r_code == 0:
         print("NS3 BUILD WIN!")
@@ -283,7 +283,7 @@ def ns3():
     print('About to start NS3 RUN  with total emulation time of %s' % str(total_emu_time))
 
     tmp = 'cd $NS3_HOME && '
-    tmp += './waf -j {0} --run "scratch/tap-vm --NumNodes={1} --TotalTime={2} --TapBaseName=emu '
+    tmp += './ns3 -j {0} run "tap-vm --NumNodes={1} --TotalTime={2} --TapBaseName=emu '
     tmp += '--SizeX={3} --SizeY={3} --MobilitySpeed={4} --MobilityPause={5}"'
     ns3_cmd = tmp.format(jobs, numberOfNodesStr, total_emu_time, scenarioSize, nodeSpeed, nodePause)
 
@@ -308,6 +308,9 @@ def run_emu():
     print("RUN SIM ...")
 
     print('About to start RUN SIM | Date now: %s' % datetime.datetime.now())
+    
+    if not os.path.exists(pidsDirectory):
+        os.makedirs(pidsDirectory)
 
     if os.path.exists(pidsDirectory + "ns3"):
         with open(pidsDirectory + "ns3", "rt") as in_file:
@@ -317,7 +320,10 @@ def run_emu():
             else:
                 print('NS3 is NOT running')
                 ns3()
-
+    else:
+        print('NS3 PID file not found, starting NS3...')
+        ns3()
+        
     container_name_list = ""
     for x in range(0, numberOfNodes):
         container_name_list += nameList[x]

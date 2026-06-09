@@ -46,7 +46,7 @@ sudo ln -s /proc/$PID/ns/net /var/run/netns/$PID
 # Create a pair of "peer" interfaces A and B,
 # bind the A end to the bridge, and bring it up
 sudo ip link add $SIDE_A type veth peer name $SIDE_B
-sudo brctl addif $BRIDGE $SIDE_A
+sudo ip link set $SIDE_A master $BRIDGE
 sudo ip link set $SIDE_A up
 
 # Place B inside the container's network namespace,

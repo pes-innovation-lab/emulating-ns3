@@ -1,3 +1,3 @@
 #!/bin/sh
 
-cp $1 $BAKE_HOME/source/ns-3.26/scratch/tap-vm.cc
+cp $1 ../../ns-3-dev/src/tap-bridge/examples/tap-vm.cc
