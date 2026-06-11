@@ -6,12 +6,12 @@ networks:
         - subnet: 10.99.0.0/24
 
 services:
-  ns3-node:
+  ns3:
     build:
       context: ./ns-3
-    container_name: ns3_container
+    container_name: ns3
     networks:
-      sim_net:
+      sim-net:
         ipv4_address: 10.99.1.11
     cap_add:
       - NET_ADMIN
@@ -22,3 +22,16 @@ services:
     volumes:
       - ./ns3-node/scripts:/app/scripts
       - ./ns3-node/scratch:/app/ns-3/scratch/scripts
+  client:
+    image: ghcr.io/astral-sh/uv:alpine
+    container_name: client
+    networks:
+      sim-net:
+        ipv4_address: 10.99.1.22
+    depends_on:
+      - ns3
+    environment:
+      SERVER_IP: "http://10.99.1.11"
+    volumes:
+      - ./client:/app
+    command: "tail -f /dev/null"
