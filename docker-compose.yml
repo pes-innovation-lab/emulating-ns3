@@ -1,0 +1,24 @@
+networks:
+  sim-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 10.99.0.0/24
+
+services:
+  ns3-node:
+    build:
+      context: ./ns-3
+    container_name: ns3_container
+    networks:
+      sim_net:
+        ipv4_address: 10.99.1.11
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun
+    sysctls:
+      - net.ipv4.ip_forward=1
+    volumes:
+      - ./ns3-node/scripts:/app/scripts
+      - ./ns3-node/scratch:/app/ns-3/scratch/scripts
