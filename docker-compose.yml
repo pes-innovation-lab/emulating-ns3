@@ -22,8 +22,8 @@ services:
     sysctls:
       - net.ipv4.ip_forward=1
     volumes:
-      - ./ns3-node/scripts:/app/scripts
-      - ./ns3-node/scratch:/app/ns-3/scratch/scripts
+      - ./ns-3/scripts:/app/scripts
+      - ./ns-3/scratch:/app/ns-3/scratch/scripts
     environment:
       - BUILD_PROF=debug
   client:
