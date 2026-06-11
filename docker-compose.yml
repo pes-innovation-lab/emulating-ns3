@@ -3,12 +3,14 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.99.0.0/24
+        - subnet: 10.99.1.0/24
 
 services:
   ns3:
     build:
       context: ./ns-3
+      args:
+        - BUILD_PROF=debug
     container_name: ns3
     networks:
       sim-net:
@@ -22,6 +24,8 @@ services:
     volumes:
       - ./ns3-node/scripts:/app/scripts
       - ./ns3-node/scratch:/app/ns-3/scratch/scripts
+    environment:
+      - BUILD_PROF=debug
   client:
     image: ghcr.io/astral-sh/uv:alpine
     container_name: client
