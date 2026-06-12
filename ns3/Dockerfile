@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y \
     ninja-build \
     python3 \
     python3-pip \
+    bzip2 \
     git \
     wget \
     tcpdump \
@@ -15,7 +16,7 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /usr/src
 
-RUN wget https://nsnam.org && \
+RUN wget https://www.nsnam.org/releases/ns-allinone-3.41.tar.bz2 && \
     tar xfj ns-allinone-3.41.tar.bz2 && \
     rm ns-allinone-3.41.tar.bz2
 

@@ -2,4 +2,10 @@ services:
 
   ns3:
     build:
-    ports:
+      context: ./ns3
+      dockerfile: Dockerfile
+    container_name: ns3-simulator
+    stdin_open: true
+    tty: true
+    volumes:
+      - .:/usr/src/workspace
