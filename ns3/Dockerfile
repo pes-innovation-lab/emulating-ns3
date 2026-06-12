@@ -22,5 +22,7 @@ RUN wget https://www.nsnam.org/releases/ns-allinone-3.41.tar.bz2 && \
 
 WORKDIR /usr/src/ns-allinone-3.41/ns-3.41
 
+COPY http-connection.cc scratch/http-connection.cc
+
 RUN ./ns3 configure --build-profile=optimized && ./ns3 build
 CMD ["sleep", "infinity"]
