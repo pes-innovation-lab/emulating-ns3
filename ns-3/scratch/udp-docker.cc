@@ -63,7 +63,6 @@ int main(int argc, char *argv[]) {
   Ptr<Node> node = nodes.Get(0);
   ApplicationContainer container = udpHelper.Install(node);
 
-  // container.Start(Seconds(0.0));
   container.Stop(Seconds(60.0));
 
   NS_LOG_INFO("Starting Docker UDP echo simulation...");
