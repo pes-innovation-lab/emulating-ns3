@@ -1,5 +1,6 @@
-services:
+version: '3.8'
 
+services:
   ns3:
     build:
       context: ./ns3
@@ -7,14 +8,73 @@ services:
     container_name: ns3-simulator
     stdin_open: true
     tty: true
+    cap_add:
+      - NET_ADMIN
     volumes:
       - .:/usr/src/workspace
 
   client:
-    image: postman/newman:alpine
+    build:
+      context: ./client
+      dockerfile: Dockerfile
     container_name: client
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        HOST_IP=$$(ip route show | grep default | awk '{print $$3}')
+        echo "Forwarding traffic from client:8080 to host: $$HOST_IP:8080"
+        socat TCP-LISTEN:8080,fork TCP:$$HOST_IP:8080
     depends_on:
       - ns3
     volumes:
       - ./client:/etc/newman
-    command:
+
+  netkit-init:
+    build:
+      context: ./netkit-init
+      dockerfile: Dockerfile
+    container_name: netkit_initializer
+    network_mode: "host"
+    pid: "host"
+    privileged: true
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/run/netns:/var/run/netns:shared
+    environment:
+      - C1=ns3-simulator
+      - C2=client
+    entrypoint: >
+      /bin/sh -c "
+      
+      echo 'Waiting for containers to be ready...';
+      while [ -z \"$$PID1\" ] || [ -z \"$$PID2\" ]; do
+        PID1=$$(curl --unix-socket /var/run/docker.sock http://localhost/containers/$$C1/json | jq -r '.State.Pid // empty')
+        PID2=$$(curl --unix-socket /var/run/docker.sock http://localhost/containers/$$C2/json | jq -r '.State.Pid // empty')
+        sleep 1
+      done;
+
+      echo 'Linking network namespaces...';
+      mkdir -p /var/run/netns;
+      ln -sf /proc/$$PID1/ns/net /var/run/netns/ns1;
+      ln -sf /proc/$$PID2/ns/net /var/run/netns/ns2;
+
+      echo 'Creating netkit link in L2 mode...';
+      ip link del nk1 2>/dev/null || true;
+      ip link add nk1 type netkit mode l2 peer name nk2;
+
+      echo 'Moving devices into containers...';
+      ip link set nk1 netns ns1;
+      ip link set nk2 netns ns2;
+
+      echo 'Configuring IPs, MACs and bringing interfaces up...';
+      ip netns exec ns1 ip link set nk1 address 00:00:00:00:00:01;
+      ip netns exec ns1 ip link set nk1 promisc on;
+      ip netns exec ns1 ip link set nk1 up;
+      
+      ip netns exec ns2 ip link set nk2 address 00:00:00:00:00:02;
+      ip netns exec ns2 ip addr add 10.10.0.2/24 dev nk2;
+      ip netns exec ns2 ethtool -K nk2 tx off;
+      ip netns exec ns2 ip link set nk2 up;
+
+      echo 'Netkit connection successfully established!';
+      "
