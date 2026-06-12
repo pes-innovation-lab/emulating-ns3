@@ -17,8 +17,7 @@ services:
         ipv4_address: 10.99.1.11
     cap_add:
       - NET_ADMIN
-    devices:
-      - /dev/net/tun
+      - NET_RAW
     sysctls:
       - net.ipv4.ip_forward=1
     volumes:
@@ -35,7 +34,7 @@ services:
     depends_on:
       - ns3
     environment:
-      SERVER_IP: "http://10.99.1.11"
+      SERVER_IP: "10.99.1.11"
     volumes:
       - ./client:/app
     command: "tail -f /dev/null"

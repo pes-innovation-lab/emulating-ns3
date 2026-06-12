@@ -4,7 +4,7 @@ ARG DEBIAN_FRONTEND=noninteractive
 ARG BUILD_PROF="optimized"
 
 RUN apt -y update && apt -y upgrade && \
- apt -y install curl g++ cmake ninja-build ccache python3 python3-dev python3-pip gsl-bin libgsl-dev libgslcblas0 libboost-all-dev libgtk-3-dev libfl-dev libxml2 libxml2-dev libopenmpi-dev openmpi-bin openmpi-common openmpi-doc libsqlite3-dev sqlite3 libeigen3-dev qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools python3.12-venv net-tools tcpdump iputils-ping iptables
+ apt -y install curl g++ cmake ninja-build ccache python3 python3-dev python3-pip gsl-bin libgsl-dev libgslcblas0 libboost-all-dev libgtk-3-dev libfl-dev libxml2 libxml2-dev libopenmpi-dev openmpi-bin openmpi-common openmpi-doc libsqlite3-dev sqlite3 libeigen3-dev qtbase5-dev qtchooser qt5-qmake qtbase5-dev-tools python3.12-venv net-tools tcpdump iputils-ping iptables iproute2
 # TODO: update to allinone once released
 RUN mkdir -p /app && cd /tmp && \
     curl -O https://www.nsnam.org/releases/ns-3.48.tar.bz2 && \
