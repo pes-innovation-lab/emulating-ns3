@@ -122,22 +122,6 @@ main (int argc, char *argv[])
   addresses.SetBase ("10.10.0.0", "255.255.255.0", "10.10.0.1");
   Ipv4InterfaceContainer interfaces = addresses.Assign (devices);
 
-  // Add static ARP entry for the client container IP 10.10.0.2
-  // since the Netkit virtual interface runs in NOARP mode by default (or to guarantee direct delivery)
-  // AI generated code
-  Ptr<Ipv4L3Protocol> ipv4 = nodes.Get (0)->GetObject<Ipv4L3Protocol> ();
-  Ptr<Ipv4Interface> ipIface = ipv4->GetInterface (1);
-  Ptr<ArpCache> arp = ipIface->GetArpCache ();
-  if (arp)
-    {
-      std::cout << "ARP Cache is NOT null" << std::endl;
-      ArpCache::Entry *entry = arp->Add (Ipv4Address ("10.10.0.2"));
-      if (entry)
-        {
-          entry->SetMacAddress (Mac48Address ("00:00:00:00:00:02"));
-          entry->MarkPermanent ();
-        }
-    }
 
   // Set up TCP socket
   Ptr<Socket> socket = Socket::CreateSocket (nodes.Get (0), TcpSocketFactory::GetTypeId ());

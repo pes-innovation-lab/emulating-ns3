@@ -38,7 +38,12 @@ To allow the client container's proxy to forward the simulation's HTTP POST requ
 ### 3. Run the Simulation
 Execute the NS-3 simulation inside the `ns3-simulator` container:
 ```bash
-docker exec ns3-simulator /usr/src/ns-allinone-3.41/ns-3.41/build/scratch/ns3.41-http-connection-optimized
+docker exec -it ns3-simulator /bin/sh 
+```
+Then, run
+```bash
+./ns3 configure
+./ns3 run http-connection
 ```
 
 ### 4. Output Logs
@@ -59,9 +64,9 @@ Simulation run ended
 Simulation destroyed
 ```
 
-If you inspect the network traffic using `tcpdump` inside the container:
+If you inspect the network traffic using `tcpdump` inside the container shell:
 ```bash
-docker exec ns3-simulator tcpdump -qns 0 -A -r /usr/src/ns-allinone-3.41/ns-3.41/http-connection-0-0.pcap
+tcpdump -qns 0 -A -r http-connection-0-0.pcap
 ```
 You will see the complete HTTP POST payload delivered over the Netkit link:
 ```
