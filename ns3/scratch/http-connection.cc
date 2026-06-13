@@ -65,32 +65,23 @@ ConnectionFailed (Ptr<Socket> socket)
 }
 
 /**
- * Print network interface status and ARP cache details for debugging.
+ * Callback function invoked when the TCP socket receives a packet.
  *
- * \param node The simulator node to query.
+ * \param socket The socket which received data.
  */
 void
-PrintDebugInfo (Ptr<Node> node) //AI generated
+ReceivePacket (Ptr<Socket> socket)
 {
-  std::cout << "--- DEBUG INFO at " << Simulator::Now ().GetSeconds () << "s ---" << std::endl;
-  Ptr<Ipv4L3Protocol> ipv4 = node->GetObject<Ipv4L3Protocol> ();
-  std::cout << "Number of interfaces: " << ipv4->GetNInterfaces () << std::endl;
-  for (uint32_t i = 0; i < ipv4->GetNInterfaces (); ++i)
+  Ptr<Packet> packet;
+  while ((packet = socket->Recv ()))
     {
-      Ptr<Ipv4Interface> iface = ipv4->GetInterface (i);
-      std::cout << "Interface " << i << ": ";
-      for (uint32_t j = 0; j < iface->GetNAddresses (); ++j)
-        {
-          std::cout << iface->GetAddress (j).GetLocal () << " ";
-        }
-      std::cout << " ARP cache is " << (iface->GetArpCache () ? "NOT null" : "null") << " pointer = " << iface->GetArpCache () << std::endl;
-      if (iface->GetArpCache ())
-        {
-          Ptr<OutputStreamWrapper> osm = Create<OutputStreamWrapper> (&std::cout);
-          iface->GetArpCache ()->PrintArpCache (osm);
-        }
+      uint32_t size = packet->GetSize ();
+      uint8_t *buffer = new uint8_t[size + 1];
+      packet->CopyData (buffer, size);
+      buffer[size] = '\0';
+      std::cout << "Received response: " << buffer << std::endl;
+      delete[] buffer;
     }
-  std::cout << "-----------------------------------" << std::endl;
 }
 
 int
@@ -126,6 +117,7 @@ main (int argc, char *argv[])
   // Set up TCP socket
   Ptr<Socket> socket = Socket::CreateSocket (nodes.Get (0), TcpSocketFactory::GetTypeId ());
   socket->SetConnectCallback (MakeCallback (&ConnectionSucceeded), MakeCallback (&ConnectionFailed));
+  socket->SetRecvCallback (MakeCallback (&ReceivePacket));
 
   InetSocketAddress remote = InetSocketAddress (Ipv4Address ("10.10.0.2"), 8080);
 
