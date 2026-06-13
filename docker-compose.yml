@@ -20,9 +20,7 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     command:
       - |
-        HOST_IP=$$(ip route show | grep default | awk '{print $$3}')
-        echo "Forwarding traffic from client:8080 to host: $$HOST_IP:8080"
-        socat TCP-LISTEN:8080,fork TCP:$$HOST_IP:8080
+        socat -v TCP-LISTEN:8080,crlf,reuseaddr,fork SYSTEM:"cat /etc/newman/response.txt"
     depends_on:
       - ns3
     volumes:
