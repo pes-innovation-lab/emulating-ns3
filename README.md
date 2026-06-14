@@ -1,74 +1,63 @@
-# NS-3 Netkit Emulation and Postman Integration
+# NS-3 Netkit Emulation Bidirectional HTTP Connection
 
-This branch sets up L2 peer-to-peer Netkit link between an NS-3 simulator container and a proxy client container to transmit a HTTP message from ns3 to the other container.
+This branch demonstrates a peer-to-peer Layer 2 Netkit link established between an NS-3 simulator container and a client container. In this setup, the simulator sends an HTTP POST request to the client container, which responds with an HTTP response containing a payload. The simulator then reads and prints this response to stdout.
 
 ## Requirements
 
-1. **Operating System**: Linux with support for Netkit kernel module (Kernel 6.7+ or module loaded).
+1. **Operating System**: Linux with Netkit kernel module support (Kernel 6.7+ or Netkit module loaded).
 2. **Docker**: Docker Engine and Docker Compose installed.
-3. **Privileges**: Ability to run Docker containers in privileged mode (required by the netkit-init container to manipulate network namespaces and interfaces on the host).
-4. **Postman**: Postman Desktop Application installed on the host machine.
-5. **Firewall**: UFW or another firewall daemon configured to allow incoming traffic on port 8080.
+3. **Privileges**: Ability to run containers in privileged mode (required by the network initializer helper container to configure host namespaces and interfaces).
 
 ---
 
 ## Configuration and Setup
 
 The network topology consists of a peer-to-peer Netkit link (`nk1` <-> `nk2`) operating in Layer 2 mode:
-- **NS-3 Simulator Node**: Binds to `nk1` with simulated IP `10.10.0.1` and hardware MAC `00:00:00:00:00:01`.
-- **Proxy Client Node**: Binds to `nk2` with IP `10.10.0.2` and hardware MAC `00:00:00:00:00:02`. Disables TX checksum offloading (`ethtool -K nk2 tx off`) to prevent packet drops inside ns3 TCP/IP stack.
-- **Port Forwarding**: The proxy client runs `socat` to forward TCP connections from `10.10.0.2:8080` to host IP `10.10.0.1:8080`.
+- **NS-3 Simulator Node**: Binds to the `nk1` interface with the simulated IP address `10.10.0.1` and hardware MAC `00:00:00:00:00:01`.
+- **Client Node**: Binds to the `nk2` interface with the IP address `10.10.0.2` and hardware MAC `00:00:00:00:00:02`. TX checksum offloading is disabled (`ethtool -K nk2 tx off`) on this interface to prevent the NS-3 TCP/IP stack from rejecting packets.
+- **HTTP Server**: The client container runs `socat` listening on port 8080, serving a pre-configured response file (`/etc/newman/response.txt`) with the body `"hello ns3"`.
 
 ---
 
 ## Executing the Simulation
 
 ### 1. Build and Start the Environment
-Run the following commands on your host:
+Run the following command on the host to build and launch the container stack:
 ```bash
-docker compose build
-docker compose up -d
+docker compose down && docker compose up -d
 ```
 
-### (If required) Configure Host Firewall
-If host has UFW active, it may block incoming connections from the Docker containers to the host's ports.
-
-To allow the client container's proxy to forward the simulation's HTTP POST request to your host's Postman app.
-
-### 3. Run the Simulation
-Execute the NS-3 simulation inside the `ns3-simulator` container:
+### 2. Run the Simulation
+Execute the NS-3 simulation in the `ns3-simulator` container:
 ```bash
-docker exec -it ns3-simulator /bin/sh 
-```
-Then, run
-```bash
-./ns3 configure
-./ns3 run http-connection
+docker exec ns3-simulator ./ns3 run scratch/scripts/http-connection.cc
 ```
 
-### 4. Output Logs
-Upon running, you will see the TCP handshake succeed and the HTTP POST request sent:
+### 3. Verify Output Logs
+The simulator logs will show the successful TCP connection, the HTTP POST transmission, and the HTTP response received from the client:
 ```
 Simulation main started
-ARP Cache is NOT null
 Scheduling socket connection...
 Starting simulation run...
---- DEBUG INFO at 4.9s ---
-Number of interfaces: 2
-Interface 0: 127.0.0.1  ARP cache is null pointer = 0
-Interface 1: 10.10.0.1  ARP cache is NOT null pointer = 0x560fb3268ae0
------------------------------------
 TCP Connection Succeeded!
 Sent HTTP POST packet: hello world
+Received response: HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 9
+Connection: close
+
+hello ns3
 Simulation run ended
 Simulation destroyed
 ```
 
-If you inspect the network traffic using `tcpdump` inside the container shell:
+### 4. Verify Traffic via tcpdump
+To verify the bidirectional HTTP transaction packet capture, run tcpdump against the generated pcap file:
 ```bash
-tcpdump -qns 0 -A -r http-connection-0-0.pcap
+docker exec ns3-simulator tcpdump -qns 0 -A -r /usr/src/ns-allinone-3.41/ns-3.41/http-connection-0-0.pcap
 ```
-You will see the complete HTTP POST payload delivered over the Netkit link:
+
+The output will display the complete HTTP POST request followed by the HTTP 200 OK response:
 ```
 POST / HTTP/1.1
 Host: 10.10.0.2:8080
@@ -77,6 +66,13 @@ Content-Length: 11
 Connection: close
 
 hello world
+
+HTTP/1.1 200 OK
+Content-Type: text/plain
+Content-Length: 9
+Connection: close
+
+hello ns3
 ```
 
 ---
@@ -84,13 +80,13 @@ hello world
 ## Troubleshooting
 
 ### Mismatched MAC Filtering
-If packets are dropped during the TCP handshake:
-- Ensure the hardware MAC of the virtual `nk1` interface matches `00:00:00:00:00:01` inside the namespace. The initializer handles this automatically.
+If TCP packets are silently dropped during connection setup:
+- Verify that the MAC address of `nk1` inside the simulator's network namespace is explicitly set to `00:00:00:00:00:01`.
 
 ### Checksum Offloading Drops
-If NS-3 ignores incoming SYN-ACK packets:
-- Verify that TX checksum offloading is disabled on the client peer:
+If NS-3 ignores the incoming SYN-ACK packet:
+- Ensure TX checksum offloading is disabled on the client side:
   ```bash
   docker exec client ethtool -k nk2 | grep tx-checksum
   ```
-  It must show `tx-checksum-ip-generic: off`.
+  It must return `tx-checksum-ip-generic: off`.
