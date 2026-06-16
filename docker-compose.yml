@@ -13,6 +13,7 @@ services:
       - BUILD_PROF=debug
     volumes:
       - ./ns3/scratch:/app/ns-3/scratch/scripts
+      - ./ns3/run_sim.sh:/app/ns-3/run_sim.sh
 
   client:
     build:
