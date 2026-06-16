@@ -24,13 +24,14 @@ The network topology consists of a peer-to-peer Netkit link (`nk1` <-> `nk2`) op
 ### 1. Build and Start the Environment
 Run the following command on the host to build and launch the container stack:
 ```bash
+chmod +x
 docker compose down && docker compose up -d
 ```
 
 ### 2. Run the Simulation
 Execute the NS-3 simulation in the `ns3-simulator` container:
 ```bash
-docker exec ns3-simulator ./ns3 run scratch/scripts/http-connection.cc
+docker exec ns3-simulator ./run_sim.sh http-connection
 ```
 
 ### 3. Verify Output Logs
@@ -54,7 +55,7 @@ Simulation destroyed
 ### 4. Verify Traffic via tcpdump
 To verify the bidirectional HTTP transaction packet capture, run tcpdump against the generated pcap file:
 ```bash
-docker exec ns3-simulator tcpdump -qns 0 -A -r /usr/src/ns-allinone-3.41/ns-3.41/http-connection-0-0.pcap
+docker exec ns3-simulator tcpdump -qns 0 -A -r /app/ns-3/http-connection-0-0.pcap
 ```
 
 The output will display the complete HTTP POST request followed by the HTTP 200 OK response:

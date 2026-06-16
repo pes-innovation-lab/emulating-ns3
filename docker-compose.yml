@@ -38,6 +38,9 @@ services:
     network_mode: "host"
     pid: "host"
     privileged: true
+    cap_add:
+      - SYS_ADMIN
+      - NET_ADMIN
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/run/netns:/var/run/netns:shared

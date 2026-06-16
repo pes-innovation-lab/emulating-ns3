@@ -46,7 +46,7 @@ RUN mkdir -p /app && cd /tmp && \
     mv ${VERSION} /app/ns-3
 RUN python3 -m venv /app/pyenv
 RUN cd /app/ns-3 && . /app/pyenv/bin/activate && \
-    ./ns3 configure --build-profile=${BUILD_PROF} --enable-examples --enable-tests && \
+    ./ns3 configure --build-profile=${BUILD_PROF} && \
     ./ns3 build
 WORKDIR /app/ns-3
 CMD [ "tail", "-f", "/dev/null" ]

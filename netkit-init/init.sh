@@ -1,4 +1,4 @@
-#!/bin/env bash
+#!/bin/sh
 echo 'Waiting for containers to be ready...'
 while [ -z "$PID1" ] || [ -z "$PID2" ]; do
     PID1=$(curl --unix-socket /var/run/docker.sock http://localhost/containers/"$C1"/json | jq -r '.State.Pid // empty')
