@@ -110,7 +110,7 @@ main (int argc, char *argv[])
   stack.Install (nodes);
 
   Ipv4AddressHelper addresses;
-  addresses.SetBase ("10.10.0.0", "255.255.255.0", "10.10.0.1");
+  addresses.SetBase ("10.10.0.0", "255.255.255.0", "0.0.0.1");
   Ipv4InterfaceContainer interfaces = addresses.Assign (devices);
 
 
@@ -123,7 +123,6 @@ main (int argc, char *argv[])
 
   // Schedule the connection after 5 seconds to ensure netkit interfaces are ready
   std::cout << "Scheduling socket connection..." << std::endl;
-  Simulator::Schedule (Seconds (4.9), &PrintDebugInfo, nodes.Get (0));
   Simulator::Schedule (Seconds (5.0), &Socket::Connect, socket, remote);
 
   std::cout << "Starting simulation run..." << std::endl;
