@@ -1,26 +1,52 @@
-FROM ubuntu:22.04
+FROM ubuntu:24.04
 
-ENV DEBIAN_FRONTEND=noninteractive
+ARG DEBIAN_FRONTEND=noninteractive
+ARG BUILD_PROF="optimized"
+ARG VERSION="ns-3.48"
 
-RUN apt-get update && apt-get install -y \
-    g++ \
-    cmake \
-    ninja-build \
-    python3 \
-    python3-pip \
-    bzip2 \
-    git \
-    wget \
-    tcpdump \
-    && rm -rf /var/lib/apt/lists/*
+RUN apt -y update && apt -y upgrade && \
+ apt -y install curl \
+ g++ \
+ cmake \
+ ninja-build \
+ ccache \
+ python3 \
+ python3-dev \
+ python3-pip \
+ gsl-bin \
+ libgsl-dev \
+ libgslcblas0 \
+ libboost-all-dev \
+ libgtk-3-dev \
+ libfl-dev \
+ libxml2 \
+ libxml2-dev \
+ libopenmpi-dev \
+ openmpi-bin \
+ openmpi-common \
+ openmpi-doc \
+ libsqlite3-dev \
+ sqlite3 \
+ libeigen3-dev \
+ qtbase5-dev \
+ qtchooser \
+ qt5-qmake \
+ qtbase5-dev-tools \
+ python3.12-venv \
+ net-tools \
+ tcpdump \
+ iputils-ping \
+ iptables \
+ iproute2
 
-WORKDIR /usr/src
-
-RUN wget https://www.nsnam.org/releases/ns-allinone-3.41.tar.bz2 && \
-    tar xfj ns-allinone-3.41.tar.bz2 && \
-    rm ns-allinone-3.41.tar.bz2
-
-WORKDIR /usr/src/ns-allinone-3.41/ns-3.41
-
-RUN ./ns3 configure --build-profile=optimized && ./ns3 build
-CMD ["sleep", "infinity"]
+# TODO: update to allinone once released
+RUN mkdir -p /app && cd /tmp && \
+    curl -O https://www.nsnam.org/releases/${VERSION}.tar.bz2 && \
+    tar -xaf ${VERSION}.tar.bz2 && \
+    mv ${VERSION} /app/ns-3
+RUN python3 -m venv /app/pyenv
+RUN cd /app/ns-3 && . /app/pyenv/bin/activate && \
+    ./ns3 configure --build-profile=${BUILD_PROF} --enable-examples --enable-tests && \
+    ./ns3 build
+WORKDIR /app/ns-3
+CMD [ "tail", "-f", "/dev/null" ]

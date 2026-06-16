@@ -3,14 +3,16 @@ services:
     build:
       context: ./ns3
       dockerfile: Dockerfile
+      args:
+        - BUILD_PROF=debug
     container_name: ns3-simulator
-    stdin_open: true
-    tty: true
     cap_add:
       - NET_ADMIN
+      - NET_RAW # needed on some systems
+    environment:
+      - BUILD_PROF=debug
     volumes:
-      - .:/usr/src/workspace
-      - ./ns3/scratch:/usr/src/ns-allinone-3.41/ns-3.41/scratch/scripts
+      - ./ns3/scratch:/app/ns-3/scratch/scripts
 
   client:
     build:
