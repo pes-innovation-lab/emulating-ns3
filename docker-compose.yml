@@ -16,18 +16,14 @@ services:
       - ./ns3/run_sim.sh:/app/ns-3/run_sim.sh
 
   client:
-    build:
-      context: ./client
-      dockerfile: Dockerfile
+    image: ghcr.io/astral-sh/uv:alpine
     container_name: client
-    entrypoint: ["/bin/sh", "-c"]
-    command:
-      - |
-        socat -v TCP-LISTEN:8080,crlf,reuseaddr,fork SYSTEM:"cat /etc/newman/response.txt"
-    depends_on:
-      - ns3
     volumes:
-      - ./client:/etc/newman
+      - ./client:/app
+    working_dir: /app
+    environment:
+      - PYTHONUNBUFFERED=1 # have logs include python output
+    command: ["uv", "run", "main.py"]
 
   # NOTE: perhaps move this out of a container?
   netkit-init:

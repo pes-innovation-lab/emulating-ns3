@@ -1,0 +1,6 @@
+[project]
+name = "client"
+version = "0.1.0"
+description = "HTTP test server for ns-3 simulation"
+requires-python = ">=3.12"
+dependencies = []
