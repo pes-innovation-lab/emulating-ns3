@@ -1,6 +1,6 @@
-# NS-3 Netkit Emulation Bidirectional HTTP Connection
+# NS-3 Netkit Emulation Bidirectional ARP and ICMP Simulation
 
-This branch demonstrates a peer-to-peer Layer 2 Netkit link established between an NS-3 simulator container and a client container. In this setup, the simulator sends an HTTP POST request to the client container, which responds with an HTTP response containing a payload. The simulator then reads and prints this response to stdout.
+This branch demonstrates a peer-to-peer Layer 2 Netkit link established between an NS-3 simulator container and a client container. In this setup, the simulator triggers an ARP Request to the client which responds with an ARP Reply. When the client pings the simulator, both containers trace, parse, and log the resulting ARP and ICMP packets directly to their standard outputs.
 
 ## Requirements
 
@@ -14,8 +14,10 @@ This branch demonstrates a peer-to-peer Layer 2 Netkit link established between 
 
 The network topology consists of a peer-to-peer Netkit link (`nk1` <-> `nk2`) operating in Layer 2 mode:
 - **NS-3 Simulator Node**: Binds to the `nk1` interface with the simulated IP address `10.10.0.1` and hardware MAC `00:00:00:00:00:01`.
-- **Client Node**: Binds to the `nk2` interface with the IP address `10.10.0.2` and hardware MAC `00:00:00:00:00:02`. TX checksum offloading is disabled (`ethtool -K nk2 tx off`) on this interface to prevent the NS-3 TCP/IP stack from rejecting packets.
-- **HTTP Server**: The client container runs `socat` listening on port 8080, serving a pre-configured response file (`/etc/newman/response.txt`) with the body `"hello ns3"`.
+- **Client Node**: Binds to the `nk2` interface with the IP address `10.10.0.2` and hardware MAC `00:00:00:00:00:02`.
+- **Traffic Tracking**:
+  - The simulator hooks into the NetDevice `MacTx` and `MacRx` trace sources to parse and log ARP and ICMPv4 packets.
+  - The client container runs a Python raw socket sniffer on `nk2` using `ETH_P_ALL` to log both sent and received ARP and ICMP packets.
 
 ---
 
@@ -24,70 +26,61 @@ The network topology consists of a peer-to-peer Netkit link (`nk1` <-> `nk2`) op
 ### 1. Build and Start the Environment
 Run the following command on the host to build and launch the container stack:
 ```bash
-chmod +x
 docker compose down && docker compose up -d
 ```
 
 ### 2. Run the Simulation
 Execute the NS-3 simulation in the `ns3-simulator` container:
 ```bash
-docker exec ns3-simulator ./run_sim.sh http-connection
+docker exec ns3-simulator /bin/bash -c "cd /app/ns-3 && ./ns3 run scratch/scripts/arp-connection.cc"
 ```
 
-### 3. Verify Output Logs
-The simulator logs will show the successful TCP connection, the HTTP POST transmission, and the HTTP response received from the client:
+### 3. Trigger Bidirectional Exchange
+While the simulation is running (within its 15-second simulation window), trigger a ping from the `client` container in a separate terminal:
+```bash
+docker exec client ping -c 2 10.10.0.1
+```
+
+### 4. Verify Output Logs - NS-3 Simulator (Stdout)
+The simulator console logs will show the decoded trace messages for both ARP and ICMP packets:
 ```
 Simulation main started
-Scheduling socket connection...
+Scheduling ARP trigger packet...
 Starting simulation run...
-TCP Connection Succeeded!
-Sent HTTP POST packet: hello world
-Received response: HTTP/1.1 200 OK
-Content-Type: text/plain
-Content-Length: 9
-Connection: close
-
-hello ns3
+NS-3: Sent ARP Request
+NS-3: Received ARP Response
+NS-3: Received ICMP Dest Unreachable
+NS-3: Received ICMP Echo Request
+NS-3: Sent ICMP Echo Reply
+NS-3: Received ARP Request
+NS-3: Sent ARP Response
+NS-3: Received ICMP Echo Request
+NS-3: Sent ICMP Echo Reply
 Simulation run ended
 Simulation destroyed
 ```
 
-### 4. Verify Traffic via tcpdump
-To verify the bidirectional HTTP transaction packet capture, run tcpdump against the generated pcap file:
+### 5. Verify Client-Side Logs
+Check the logs of the `client` container to verify it captured the ARP and ICMP packets:
 ```bash
-docker exec ns3-simulator tcpdump -qns 0 -A -r /app/ns-3/http-connection-0-0.pcap
+docker logs client
 ```
 
-The output will display the complete HTTP POST request followed by the HTTP 200 OK response:
+Output:
 ```
-POST / HTTP/1.1
-Host: 10.10.0.2:8080
-Content-Type: text/plain
-Content-Length: 11
-Connection: close
-
-hello world
-
-HTTP/1.1 200 OK
-Content-Type: text/plain
-Content-Length: 9
-Connection: close
-
-hello ns3
+Client: Received ARP Request - Who has 10.10.0.2? Tell 10.10.0.1
+Client: Sent ARP Response - 10.10.0.2 is at 00:00:00:00:00:02
+Client: Sent ICMP Dest Unreachable from 10.10.0.2
+Client: Sent ICMP Echo Request - 10.10.0.2 -> 10.10.0.1
+Client: Received ICMP Echo Reply - 10.10.0.1 -> 10.10.0.2
+Client: Sent ARP Request - Who has 10.10.0.1? Tell 10.10.0.2
+Client: Received ARP Response - 10.10.0.1 is at 00:00:00:00:00:01
+Client: Sent ICMP Echo Request - 10.10.0.2 -> 10.10.0.1
+Client: Received ICMP Echo Reply - 10.10.0.1 -> 10.10.0.2
 ```
 
----
-
-## Troubleshooting
-
-### Mismatched MAC Filtering
-If TCP packets are silently dropped during connection setup:
-- Verify that the MAC address of `nk1` inside the simulator's network namespace is explicitly set to `00:00:00:00:00:01`.
-
-### Checksum Offloading Drops
-If NS-3 ignores the incoming SYN-ACK packet:
-- Ensure TX checksum offloading is disabled on the client side:
-  ```bash
-  docker exec client ethtool -k nk2 | grep tx-checksum
-  ```
-  It must return `tx-checksum-ip-generic: off`.
+### 6. Verify Traffic via tcpdump
+To verify the bidirectional ARP and ICMP transaction packet capture, run tcpdump against the generated pcap file:
+```bash
+docker exec ns3-simulator tcpdump -e -n -r /app/ns-3/arp-connection-0-0.pcap
+```
