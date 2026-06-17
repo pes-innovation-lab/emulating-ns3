@@ -24,6 +24,8 @@
 #include "ns3/arp-l3-protocol.h"
 #include "ns3/ethernet-header.h"
 #include "ns3/arp-header.h"
+#include "ns3/ipv4-header.h"
+#include "ns3/icmpv4.h"
 
 using namespace ns3;
 
@@ -54,6 +56,32 @@ DeviceTx (Ptr<const Packet> packet)
                 }
             }
         }
+      else if (ethHeader.GetLengthType () == 0x0800) // IPv4
+        {
+          Ipv4Header ipHeader;
+          if (p->RemoveHeader (ipHeader))
+            {
+              if (ipHeader.GetProtocol () == 1) // ICMP
+                {
+                  Icmpv4Header icmpHeader;
+                  if (p->RemoveHeader (icmpHeader))
+                    {
+                      if (icmpHeader.GetType () == Icmpv4Header::ICMPV4_ECHO)
+                        {
+                          std::cout << "NS-3: Sent ICMP Echo Request" << std::endl;
+                        }
+                      else if (icmpHeader.GetType () == Icmpv4Header::ICMPV4_ECHO_REPLY)
+                        {
+                          std::cout << "NS-3: Sent ICMP Echo Reply" << std::endl;
+                        }
+                      else if (icmpHeader.GetType () == Icmpv4Header::ICMPV4_DEST_UNREACH)
+                        {
+                          std::cout << "NS-3: Sent ICMP Dest Unreachable" << std::endl;
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -79,6 +107,32 @@ DeviceRx (Ptr<const Packet> packet)
               else if (arpHeader.IsReply ())
                 {
                   std::cout << "NS-3: Received ARP Response" << std::endl;
+                }
+            }
+        }
+      else if (ethHeader.GetLengthType () == 0x0800) // IPv4
+        {
+          Ipv4Header ipHeader;
+          if (p->RemoveHeader (ipHeader))
+            {
+              if (ipHeader.GetProtocol () == 1) // ICMP
+                {
+                  Icmpv4Header icmpHeader;
+                  if (p->RemoveHeader (icmpHeader))
+                    {
+                      if (icmpHeader.GetType () == Icmpv4Header::ICMPV4_ECHO)
+                        {
+                          std::cout << "NS-3: Received ICMP Echo Request" << std::endl;
+                        }
+                      else if (icmpHeader.GetType () == Icmpv4Header::ICMPV4_ECHO_REPLY)
+                        {
+                          std::cout << "NS-3: Received ICMP Echo Reply" << std::endl;
+                        }
+                      else if (icmpHeader.GetType () == Icmpv4Header::ICMPV4_DEST_UNREACH)
+                        {
+                          std::cout << "NS-3: Received ICMP Dest Unreachable" << std::endl;
+                        }
+                    }
                 }
             }
         }
