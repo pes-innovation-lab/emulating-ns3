@@ -28,26 +28,26 @@ func (n *NetlinkPairDriver) CreateNetwork(req *nw_sdk.CreateNetworkRequest) erro
 		return err
 	}
 
-	networkName := req.NetworkID[:16]
+	ifPrefix := req.NetworkID[:16]
 	metadata, ok := req.Options["com.docker.network.generic"].(map[string]any)
 	if ok {
-		name, ok := metadata["net-name"].(string)
+		name, ok := metadata["if-prefix"].(string)
 		if ok && name != "" {
-			networkName = name
+			ifPrefix = name
 		}
 	}
 
 	n.Networks[req.NetworkID] = &NetkitNetwork{
-		NetworkID:   req.NetworkID,
-		NetworkName: networkName,
-		IPAMv4:      nil,
-		Pair:        nil,
+		NetworkID:       req.NetworkID,
+		InterfacePrefix: ifPrefix,
+		IPAMv4:          nil,
+		Pair:            nil,
 	}
 	if len(req.IPv4Data) > 0 {
 		n.Networks[req.NetworkID].IPAMv4 = req.IPv4Data[0]
-		slog.Info("CreateNetwork", "networkID", req.NetworkID, "networkName", networkName, "subnet", req.IPv4Data[0].Pool, "gateway", req.IPv4Data[0].Gateway)
+		slog.Info("CreateNetwork", "networkID", req.NetworkID, "ifPrefix", ifPrefix, "subnet", req.IPv4Data[0].Pool, "gateway", req.IPv4Data[0].Gateway)
 	} else {
-		slog.Info("CreateNetwork", "networkID", req.NetworkID, "networkName", networkName)
+		slog.Info("CreateNetwork", "networkID", req.NetworkID, "ifPrefix", ifPrefix)
 	}
 	return nil
 }
@@ -81,7 +81,7 @@ func (n *NetlinkPairDriver) CreateEndpoint(req *nw_sdk.CreateEndpointRequest) (*
 		} else {
 			network.Pair.SideA = ep
 		}
-		slog.Info("CreateEndpoint: SideA created", "networkName", network.NetworkName, "endpointID", req.EndpointID, "ip", ep.IPAddress, "mac", ep.MACAddress)
+		slog.Info("CreateEndpoint: SideA created", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "ip", ep.IPAddress, "mac", ep.MACAddress)
 		return &nw_sdk.CreateEndpointResponse{}, nil
 
 	} else if network.Pair.SideB == nil {
@@ -91,12 +91,12 @@ func (n *NetlinkPairDriver) CreateEndpoint(req *nw_sdk.CreateEndpointRequest) (*
 			ep.InterfaceName = fmt.Sprintf("nk-%s%s-b", req.NetworkID[:4], network.Pair.SideA.EndpointID[:4])
 		}
 		network.Pair.SideB = ep
-		slog.Info("CreateEndpoint: SideB created", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "ip", ep.IPAddress, "mac", ep.MACAddress)
+		slog.Info("CreateEndpoint: SideB created", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "ip", ep.IPAddress, "mac", ep.MACAddress)
 		return &nw_sdk.CreateEndpointResponse{}, nil
 
 	} else {
-		err := fmt.Errorf("network '%s' already has 2 endpoints", network.NetworkName)
-		slog.Error("CreateEndpoint failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
+		err := fmt.Errorf("network '%s' already has 2 endpoints", network.InterfacePrefix)
+		slog.Error("CreateEndpoint failed", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "error", err)
 		return nil, err
 	}
 }
@@ -118,30 +118,30 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 	if network.IPAMv4 != nil {
 		ip, _, err := net.ParseCIDR(network.IPAMv4.Gateway)
 		if err != nil {
-			slog.Warn("Join: failed to parse gateway CIDR, using empty gateway", "networkName", network.NetworkName, "gateway", network.IPAMv4.Gateway, "error", err)
+			slog.Warn("Join: failed to parse gateway CIDR, using empty gateway", "ifPrefix", network.InterfacePrefix, "gateway", network.IPAMv4.Gateway, "error", err)
 		} else {
 			gateway = ip.String()
 		}
 	}
 
 	if network.Pair == nil {
-		err := fmt.Errorf("network '%s' not initialised", network.NetworkName)
-		slog.Error("Join failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
+		err := fmt.Errorf("network '%s' not initialised", network.InterfacePrefix)
+		slog.Error("Join failed", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "error", err)
 		return nil, err
 	}
 
 	ep := network.Pair.findEndpoint(req.EndpointID)
 	if ep == nil {
 		err := fmt.Errorf("endpoint '%s' is not on the network '%s'", req.EndpointID, network.NetworkID)
-		slog.Error("Join failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
+		slog.Error("Join failed", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "error", err)
 		return nil, err
 	}
 
-	dstPrefix := sanitiseInterfaceName(network.NetworkName)
+	dstPrefix := sanitiseInterfaceName(network.InterfacePrefix)
 
 	if ep.Joined {
-		err := fmt.Errorf("endpoint on '%s' is already connected to container", network.NetworkName)
-		slog.Error("Join failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
+		err := fmt.Errorf("endpoint on '%s' is already connected to container", network.InterfacePrefix)
+		slog.Error("Join failed", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "error", err)
 		return nil, err
 	}
 
@@ -149,26 +149,26 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 	if !needsPair {
 		exists, err := linkExistsInHost(ep.InterfaceName)
 		if err != nil {
-			slog.Error("Join: failed to probe interface", "networkName", network.NetworkName, "interface", ep.InterfaceName, "error", err)
+			slog.Error("Join: failed to probe interface", "ifPrefix", network.InterfacePrefix, "interface", ep.InterfaceName, "error", err)
 			return nil, fmt.Errorf("failed to probe interface '%s': %w", ep.InterfaceName, err)
 		}
 		if !exists {
-			slog.Debug("Join: interface gone, recreating pair", "networkName", network.NetworkName, "interface", ep.InterfaceName)
+			slog.Debug("Join: interface gone, recreating pair", "ifPrefix", network.InterfacePrefix, "interface", ep.InterfaceName)
 			needsPair = true
 		}
 	}
 
 	if needsPair {
 		if network.Pair.SideA == nil {
-			err := fmt.Errorf("cannot create pair on '%s': SideA not registered", network.NetworkName)
-			slog.Error("Join failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
+			err := fmt.Errorf("cannot create pair on '%s': SideA not registered", network.InterfacePrefix)
+			slog.Error("Join failed", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "error", err)
 			return nil, err
 		}
 		ifNameA := fmt.Sprintf("nk-%s%s-a", req.NetworkID[:4], network.Pair.SideA.EndpointID[:4])
 		ifNameB := fmt.Sprintf("nk-%s%s-b", req.NetworkID[:4], network.Pair.SideA.EndpointID[:4])
-		slog.Debug("Join: creating netkit pair", "networkName", network.NetworkName, "ifNameA", ifNameA, "ifNameB", ifNameB)
+		slog.Debug("Join: creating netkit pair", "ifPrefix", network.InterfacePrefix, "ifNameA", ifNameA, "ifNameB", ifNameB)
 		if err := createNetkitPair(ifNameA, ifNameB); err != nil {
-			slog.Error("Join: failed to create netkit pair", "networkName", network.NetworkName, "error", err)
+			slog.Error("Join: failed to create netkit pair", "ifPrefix", network.InterfacePrefix, "error", err)
 			return nil, fmt.Errorf("failed to create netkit pair: %w", err)
 		}
 		network.Pair.SideA.InterfaceName = ifNameA
@@ -178,14 +178,14 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 	}
 
 	// Set promiscuous mode while the link is still in the host namespace.
-	slog.Debug("Join: setting promiscuous mode", "networkName", network.NetworkName, "interface", ep.InterfaceName)
+	slog.Debug("Join: setting promiscuous mode", "ifPrefix", network.InterfacePrefix, "interface", ep.InterfaceName)
 	if err := setLinkPromiscuous(ep.InterfaceName); err != nil {
-		slog.Error("Join: failed to set promiscuous", "networkName", network.NetworkName, "interface", ep.InterfaceName, "error", err)
+		slog.Error("Join: failed to set promiscuous", "ifPrefix", network.InterfacePrefix, "interface", ep.InterfaceName, "error", err)
 		return nil, fmt.Errorf("error setting promiscuous on link '%s': %w", ep.InterfaceName, err)
 	}
 	ep.Joined = true
 
-	slog.Info("Join: endpoint ready", "networkName", network.NetworkName, "endpointID", req.EndpointID, "srcName", ep.InterfaceName, "dstPrefix", dstPrefix, "gateway", gateway)
+	slog.Info("Join: endpoint ready", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "srcName", ep.InterfaceName, "dstPrefix", dstPrefix, "gateway", gateway)
 	return &nw_sdk.JoinResponse{
 		InterfaceName: nw_sdk.InterfaceName{
 			SrcName:   ep.InterfaceName,
@@ -210,14 +210,14 @@ func (n *NetlinkPairDriver) Leave(req *nw_sdk.LeaveRequest) error {
 		return err
 	}
 	if network.Pair == nil {
-		err := fmt.Errorf("network '%s' not initialised", network.NetworkName)
-		slog.Error("Leave failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
+		err := fmt.Errorf("network '%s' not initialised", network.InterfacePrefix)
+		slog.Error("Leave failed", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "error", err)
 		return err
 	}
 	ep := network.Pair.findEndpoint(req.EndpointID)
 	if ep == nil {
 		err := fmt.Errorf("endpoint '%s' is not on the network '%s'", req.EndpointID, network.NetworkID)
-		slog.Error("Leave failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
+		slog.Error("Leave failed", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "error", err)
 		return err
 	}
 
@@ -225,7 +225,7 @@ func (n *NetlinkPairDriver) Leave(req *nw_sdk.LeaveRequest) error {
 	if peer := network.Pair.findPeer(ep); peer != nil {
 		peer.Joined = false
 	}
-	slog.Info("Leave: endpoint left", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
+	slog.Info("Leave: endpoint left", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
 	return nil
 }
 
@@ -242,22 +242,22 @@ func (n *NetlinkPairDriver) DeleteEndpoint(req *nw_sdk.DeleteEndpointRequest) er
 		return err
 	}
 	if network.Pair == nil {
-		err := fmt.Errorf("network '%s' not initialised", network.NetworkName)
-		slog.Error("DeleteEndpoint failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
+		err := fmt.Errorf("network '%s' not initialised", network.InterfacePrefix)
+		slog.Error("DeleteEndpoint failed", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "error", err)
 		return err
 	}
 	ep := network.Pair.findEndpoint(req.EndpointID)
 	if ep == nil {
 		err := fmt.Errorf("endpoint '%s' is not on the network '%s'", req.EndpointID, network.NetworkID)
-		slog.Error("DeleteEndpoint failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
+		slog.Error("DeleteEndpoint failed", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "error", err)
 		return err
 	}
 
 	if ep.InterfaceName != "" {
 		// attempt to delete the host-side interface
-		slog.Debug("DeleteEndpoint: deleting link from host namespace", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
+		slog.Debug("DeleteEndpoint: deleting link from host namespace", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
 		if err := delLinkInHost(ep.InterfaceName); err != nil {
-			slog.Error("DeleteEndpoint: failed to delete link", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "error", err)
+			slog.Error("DeleteEndpoint: failed to delete link", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "error", err)
 			return fmt.Errorf("unable to delete link '%s': %w", ep.InterfaceName, err)
 		}
 	}
@@ -271,7 +271,7 @@ func (n *NetlinkPairDriver) DeleteEndpoint(req *nw_sdk.DeleteEndpointRequest) er
 		network.Pair = nil
 	}
 
-	slog.Info("DeleteEndpoint: endpoint deleted", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
+	slog.Info("DeleteEndpoint: endpoint deleted", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
 	return nil
 }
 
@@ -291,22 +291,22 @@ func (n *NetlinkPairDriver) DeleteNetwork(req *nw_sdk.DeleteNetworkRequest) erro
 	if network.Pair != nil {
 		// Safety net: endpoints should have been cleaned up via DeleteEndpoint
 		if network.Pair.SideA != nil {
-			slog.Warn("DeleteNetwork: SideA endpoint not cleaned up, forcing delete", "networkName", network.NetworkName, "interface", network.Pair.SideA.InterfaceName)
+			slog.Warn("DeleteNetwork: SideA endpoint not cleaned up, forcing delete", "ifPrefix", network.InterfacePrefix, "interface", network.Pair.SideA.InterfaceName)
 			if err := delLinkInHost(network.Pair.SideA.InterfaceName); err != nil {
-				slog.Warn("DeleteNetwork: failed to delete SideA (likely in container, will clean up on sandbox teardown)", "networkName", network.NetworkName, "interface", network.Pair.SideA.InterfaceName, "error", err)
+				slog.Warn("DeleteNetwork: failed to delete SideA (likely in container, will clean up on sandbox teardown)", "ifPrefix", network.InterfacePrefix, "interface", network.Pair.SideA.InterfaceName, "error", err)
 			}
 		}
 		if network.Pair.SideB != nil {
-			slog.Warn("DeleteNetwork: SideB endpoint not cleaned up, forcing delete", "networkName", network.NetworkName, "interface", network.Pair.SideB.InterfaceName)
+			slog.Warn("DeleteNetwork: SideB endpoint not cleaned up, forcing delete", "ifPrefix", network.InterfacePrefix, "interface", network.Pair.SideB.InterfaceName)
 			if err := delLinkInHost(network.Pair.SideB.InterfaceName); err != nil {
-				slog.Warn("DeleteNetwork: failed to delete SideB (likely in container, will clean up on sandbox teardown)", "networkName", network.NetworkName, "interface", network.Pair.SideB.InterfaceName, "error", err)
+				slog.Warn("DeleteNetwork: failed to delete SideB (likely in container, will clean up on sandbox teardown)", "ifPrefix", network.InterfacePrefix, "interface", network.Pair.SideB.InterfaceName, "error", err)
 			}
 		}
 		network.Pair = nil
 	}
 
 	delete(n.Networks, req.NetworkID)
-	slog.Info("DeleteNetwork: network deleted", "networkID", req.NetworkID, "networkName", network.NetworkName)
+	slog.Info("DeleteNetwork: network deleted", "networkID", req.NetworkID, "ifPrefix", network.InterfacePrefix)
 	return nil
 }
 
@@ -319,7 +319,7 @@ func (n *NetlinkPairDriver) EndpointInfo(req *nw_sdk.InfoRequest) (*nw_sdk.InfoR
 		return nil, fmt.Errorf("invalid network id: %s", req.NetworkID)
 	}
 	if network.Pair == nil {
-		return nil, fmt.Errorf("network '%s' doesn't have any endpoints", network.NetworkName)
+		return nil, fmt.Errorf("network '%s' doesn't have any endpoints", network.InterfacePrefix)
 	}
 	ep := network.Pair.findEndpoint(req.EndpointID)
 	if ep == nil {

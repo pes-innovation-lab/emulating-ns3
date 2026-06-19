@@ -14,4 +14,5 @@ docker rm -vf "$id"
 docker rmi rootfsimage
 
 cd ..
-sudo docker plugin create netkit ./plugin-data
+sudo docker plugin create netkit-ns-3 ./plugin-data
+sudo docker plugin enable netkit-ns-3

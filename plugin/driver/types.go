@@ -12,10 +12,10 @@ type NetlinkPairDriver struct {
 }
 
 type NetkitNetwork struct {
-	NetworkID   string
-	NetworkName string
-	IPAMv4      *nw_sdk.IPAMData
-	Pair        *NetkitPair
+	NetworkID       string
+	InterfacePrefix string
+	IPAMv4          *nw_sdk.IPAMData
+	Pair            *NetkitPair
 }
 
 type NetkitPair struct {
