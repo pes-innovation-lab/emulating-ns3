@@ -17,7 +17,7 @@ When creating a `docker-compose.yml` file, use it to create the network between 
 ```yaml
 networks:
   <network_name>:
-    driver: netkit
+    driver: netkit-ns-3
     driver_opts:
       if-prefix: <interface_prefix> # used to identify the interface in the ns-3 container
 ```
