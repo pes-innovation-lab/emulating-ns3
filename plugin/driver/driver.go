@@ -149,44 +149,30 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 
 	dstPrefix := sanitiseInterfaceName(network.NetworkName)
 
-	switch ep.NamespacePath {
-	case "":
-		// Set promiscuous mode while the link is still in the host namespace.
-		slog.Debug("Join: setting promiscuous mode", "networkName", network.NetworkName, "interface", ep.InterfaceName)
-		if err := setLinkPromiscuous(ep.InterfaceName); err != nil {
-			slog.Error("Join: failed to set promiscuous", "networkName", network.NetworkName, "interface", ep.InterfaceName, "error", err)
-			return nil, fmt.Errorf("error setting promiscuous on link '%s': %w", ep.InterfaceName, err)
-		}
-		ep.NamespacePath = req.SandboxKey
-
-		slog.Info("Join: endpoint ready", "networkName", network.NetworkName, "endpointID", req.EndpointID, "srcName", ep.InterfaceName, "dstPrefix", dstPrefix, "gateway", gateway)
-		return &nw_sdk.JoinResponse{
-			InterfaceName: nw_sdk.InterfaceName{
-				SrcName:   ep.InterfaceName,
-				DstPrefix: dstPrefix,
-			},
-			Gateway:               gateway,
-			StaticRoutes:          []*nw_sdk.StaticRoute{},
-			DisableGatewayService: false,
-		}, nil
-
-	case req.SandboxKey:
-		slog.Info("Join: endpoint already in sandbox (idempotent)", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
-		return &nw_sdk.JoinResponse{
-			InterfaceName: nw_sdk.InterfaceName{
-				SrcName:   ep.InterfaceName,
-				DstPrefix: dstPrefix,
-			},
-			Gateway:               gateway,
-			StaticRoutes:          []*nw_sdk.StaticRoute{},
-			DisableGatewayService: false,
-		}, nil
-
-	default:
+	if ep.Joined {
 		err := fmt.Errorf("endpoint on '%s' is already connected to container", network.NetworkName)
-		slog.Error("Join failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "currentNamespace", ep.NamespacePath, "requestedNamespace", req.SandboxKey, "error", err)
+		slog.Error("Join failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
 		return nil, err
 	}
+
+	// Set promiscuous mode while the link is still in the host namespace.
+	slog.Debug("Join: setting promiscuous mode", "networkName", network.NetworkName, "interface", ep.InterfaceName)
+	if err := setLinkPromiscuous(ep.InterfaceName); err != nil {
+		slog.Error("Join: failed to set promiscuous", "networkName", network.NetworkName, "interface", ep.InterfaceName, "error", err)
+		return nil, fmt.Errorf("error setting promiscuous on link '%s': %w", ep.InterfaceName, err)
+	}
+	ep.Joined = true
+
+	slog.Info("Join: endpoint ready", "networkName", network.NetworkName, "endpointID", req.EndpointID, "srcName", ep.InterfaceName, "dstPrefix", dstPrefix, "gateway", gateway)
+	return &nw_sdk.JoinResponse{
+		InterfaceName: nw_sdk.InterfaceName{
+			SrcName:   ep.InterfaceName,
+			DstPrefix: dstPrefix,
+		},
+		Gateway:               gateway,
+		StaticRoutes:          []*nw_sdk.StaticRoute{},
+		DisableGatewayService: false,
+	}, nil
 }
 
 func (n *NetlinkPairDriver) Leave(req *nw_sdk.LeaveRequest) error {
@@ -213,7 +199,7 @@ func (n *NetlinkPairDriver) Leave(req *nw_sdk.LeaveRequest) error {
 		return err
 	}
 
-	ep.NamespacePath = ""
+	ep.Joined = false
 	slog.Info("Leave: endpoint left", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
 	return nil
 }
@@ -316,7 +302,7 @@ func (n *NetlinkPairDriver) EndpointInfo(req *nw_sdk.InfoRequest) (*nw_sdk.InfoR
 		Value: map[string]string{
 			"ID":            ep.EndpointID,
 			"InterfaceName": ep.InterfaceName,
-			"NamespacePath": ep.NamespacePath,
+			"Joined":        fmt.Sprintf("%v", ep.Joined),
 			"IPAddress":     ep.IPAddress,
 			"MACAddress":    ep.MACAddress,
 			"Gateway":       ep.Gateway,

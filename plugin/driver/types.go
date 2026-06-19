@@ -26,9 +26,10 @@ type NetkitPair struct {
 type NetkitEndpoint struct {
 	EndpointID    string
 	InterfaceName string
-	NamespacePath string
-	IPAddress     string
-	MACAddress    string
-	Gateway       string
-	// IPv6Address   string
+
+	Joined bool
+
+	IPAddress  string
+	MACAddress string
+	Gateway    string
 }
