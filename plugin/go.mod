@@ -1,0 +1,16 @@
+module github.com/pes-innovation-lab/ns-3-docker-network
+
+go 1.26.4
+
+require (
+	github.com/docker/go-plugins-helpers v0.0.0-20240701071450-45e2431495c8
+	github.com/vishvananda/netlink v1.3.1
+	github.com/vishvananda/netns v0.0.5
+)
+
+require (
+	github.com/Microsoft/go-winio v0.6.2 // indirect
+	github.com/coreos/go-systemd v0.0.0-20191104093116-d3cd4ed1dbcf // indirect
+	github.com/docker/go-connections v0.7.0 // indirect
+	golang.org/x/sys v0.10.0 // indirect
+)
