@@ -26,6 +26,7 @@
 #include "ns3/arp-header.h"
 #include "ns3/ipv4-header.h"
 #include "ns3/icmpv4.h"
+#include "ns3/ospf-helper.h"
 
 using namespace ns3;
 
@@ -79,6 +80,10 @@ DeviceTx (Ptr<const Packet> packet)
                           std::cout << "NS-3: Sent ICMP Dest Unreachable" << std::endl;
                         }
                     }
+                }
+              else if (ipHeader.GetProtocol () == 89) // OSPF
+                {
+                  std::cout << "NS-3: Sent OSPF Packet" << std::endl;
                 }
             }
         }
@@ -134,6 +139,10 @@ DeviceRx (Ptr<const Packet> packet)
                         }
                     }
                 }
+              else if (ipHeader.GetProtocol () == 89) // OSPF
+                {
+                  std::cout << "NS-3: Received OSPF Packet" << std::endl;
+                }
             }
         }
     }
@@ -151,7 +160,6 @@ SendPacket (Ptr<Socket> socket, Ptr<Packet> packet)
 int
 main (int argc, char *argv[])
 {
-  std::cout << "Simulation main started" << std::endl;
   CommandLine cmd (__FILE__);
   cmd.Parse (argc, argv);
 
@@ -170,7 +178,13 @@ main (int argc, char *argv[])
   // Enable packet capture
   emu.EnablePcap ("arp-connection", devices.Get (0), true);
 
+  // Configure OSPF Routing Protocol defaults
+  Config::SetDefault ("ns3::OspfRoutingProtocol::HelloInterval", UintegerValue (10));
+  Config::SetDefault ("ns3::OspfRoutingProtocol::RouterDeadInterval", UintegerValue (30));
+
   InternetStackHelper stack;
+  OspfHelper ospf;
+  stack.SetRoutingHelper (ospf);
   stack.Install (nodes);
 
   Ipv4AddressHelper addresses;
@@ -193,7 +207,7 @@ main (int argc, char *argv[])
   Simulator::Schedule (Seconds (5.0), &SendPacket, socket, packet);
 
   std::cout << "Starting simulation run..." << std::endl;
-  Simulator::Stop (Seconds (15.0));
+  Simulator::Stop (Seconds (40.0));
   Simulator::Run ();
   std::cout << "Simulation run ended" << std::endl;
   Simulator::Destroy ();

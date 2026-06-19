@@ -54,6 +54,8 @@ def main():
                 if len(ip_header) < 20:
                     continue
                 version_ihl, tos, total_length, ip_id, flags_fragment, ttl, proto, checksum, src_ip_bytes, dest_ip_bytes = struct.unpack("!BBHHHBBH4s4s", ip_header)
+                src_ip = socket.inet_ntoa(src_ip_bytes)
+                dest_ip = socket.inet_ntoa(dest_ip_bytes)
                 
                 if proto == 1: # ICMP
                     ihl = version_ihl & 0x0F
@@ -64,15 +66,15 @@ def main():
                         continue
                     icmp_type, icmp_code, icmp_checksum = struct.unpack("!BBH", icmp_header)
                     
-                    src_ip = socket.inet_ntoa(src_ip_bytes)
-                    dest_ip = socket.inet_ntoa(dest_ip_bytes)
-                    
                     if icmp_type == 8:
                         print(f"Client: {direction} ICMP Echo Request - {src_ip} -> {dest_ip}")
                     elif icmp_type == 0:
                         print(f"Client: {direction} ICMP Echo Reply - {src_ip} -> {dest_ip}")
                     elif icmp_type == 3:
                         print(f"Client: {direction} ICMP Dest Unreachable from {src_ip}")
+                        
+                elif proto == 89: # OSPF
+                    print(f"Client: {direction} OSPF Packet - {src_ip} -> {dest_ip}")
                         
         except KeyboardInterrupt:
             break

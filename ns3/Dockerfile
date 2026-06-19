@@ -6,6 +6,7 @@ ARG VERSION="ns-3.48"
 
 RUN apt -y update && apt -y upgrade && \
  apt -y install curl \
+ git \
  g++ \
  cmake \
  ninja-build \
@@ -44,9 +45,13 @@ RUN mkdir -p /app && cd /tmp && \
     curl -O https://www.nsnam.org/releases/${VERSION}.tar.bz2 && \
     tar -xaf ${VERSION}.tar.bz2 && \
     mv ${VERSION} /app/ns-3
+
+# Copy OSPF module
+COPY ospf /app/ns-3/src/ospf
+
 RUN python3 -m venv /app/pyenv
 RUN cd /app/ns-3 && . /app/pyenv/bin/activate && \
-    ./ns3 configure --build-profile=${BUILD_PROF} && \
+    ./ns3 configure --build-profile=${BUILD_PROF} --enable-examples --enable-tests && \
     ./ns3 build
 WORKDIR /app/ns-3
 CMD [ "tail", "-f", "/dev/null" ]

@@ -1,6 +1,6 @@
-# NS-3 Netkit Emulation Bidirectional ARP and ICMP Simulation
+# NS-3 Netkit Emulation Bidirectional OSPFv2 Simulation
 
-This branch demonstrates a peer-to-peer Layer 2 Netkit link established between an NS-3 simulator container and a client container. In this setup, the simulator triggers an ARP Request to the client which responds with an ARP Reply. When the client pings the simulator, both containers trace, parse, and log the resulting ARP and ICMP packets directly to their standard outputs.
+This branch demonstrates OSPFv2 routing protocol integration and neighbor adjacency established between an NS-3 simulator container (running ns-3.48 with a native C++ OSPFv2 module) and a client container (running FRRouting) over a peer-to-peer Layer 2 Netkit link (`nk1` <-> `nk2` on subnet `10.10.0.0/24`).
 
 ## Requirements
 
@@ -13,11 +13,13 @@ This branch demonstrates a peer-to-peer Layer 2 Netkit link established between 
 ## Configuration and Setup
 
 The network topology consists of a peer-to-peer Netkit link (`nk1` <-> `nk2`) operating in Layer 2 mode:
-- **NS-3 Simulator Node**: Binds to the `nk1` interface with the simulated IP address `10.10.0.1` and hardware MAC `00:00:00:00:00:01`.
-- **Client Node**: Binds to the `nk2` interface with the IP address `10.10.0.2` and hardware MAC `00:00:00:00:00:02`.
-- **Traffic Tracking**:
-  - The simulator hooks into the NetDevice `MacTx` and `MacRx` trace sources to parse and log ARP and ICMPv4 packets.
-  - The client container runs a Python raw socket sniffer on `nk2` using `ETH_P_ALL` to log both sent and received ARP and ICMP packets.
+- **NS-3 Simulator Node**: Binds to the `nk1` interface with the simulated IP address `10.10.0.1/24` and hardware MAC `00:00:00:00:00:01`. It runs a native C++ OSPFv2 implementation.
+- **Client Node**: Binds to the `nk2` interface with the IP address `10.10.0.2/24` and hardware MAC `00:00:00:00:00:02`. It runs the FRRouting daemon (`ospfd`).
+- **OSPF Parameters**:
+  - Hello Interval: 10 seconds
+  - Router Dead Interval: 30 seconds
+  - Area: 0.0.0.0 (Backbone)
+  - Options: 0x02 (E-bit set for external routing capability)
 
 ---
 
@@ -26,61 +28,74 @@ The network topology consists of a peer-to-peer Netkit link (`nk1` <-> `nk2`) op
 ### 1. Build and Start the Environment
 Run the following command on the host to build and launch the container stack:
 ```bash
-docker compose down && docker compose up -d
+docker compose down && docker compose up -d --build
 ```
+This builds both the client container with FRR configuration baked-in and the NS-3 container with the native OSPF module compiled.
 
-### 2. Run the Simulation
-Execute the NS-3 simulation in the `ns3-simulator` container:
+### 2. Establish Network Namespace Link
+Since restarting containers recreates their namespaces, run the following command to link the container interfaces:
 ```bash
-docker exec ns3-simulator /bin/bash -c "cd /app/ns-3 && ./ns3 run scratch/scripts/arp-connection.cc"
+docker compose restart netkit-init
 ```
 
-### 3. Trigger Bidirectional Exchange
-While the simulation is running (within its 15-second simulation window), trigger a ping from the `client` container in a separate terminal:
+### 3. Run the OSPF Simulation
+Execute the NS-3 OSPF simulation script:
 ```bash
-docker exec client ping -c 2 10.10.0.1
+docker exec ns3-simulator /bin/bash -c "cd /app/ns-3 && . /app/pyenv/bin/activate && ./ns3 run scratch/scripts/ospf-connection.cc"
 ```
 
-### 4. Verify Output Logs - NS-3 Simulator (Stdout)
-The simulator console logs will show the decoded trace messages for both ARP and ICMP packets:
+---
+
+## Verification
+
+### 1. Verify Simulation Output (Stdout)
+While the simulation is running (for 40 seconds), you should see OSPF and ARP packets logged:
 ```
-Simulation main started
 Scheduling ARP trigger packet...
 Starting simulation run...
+NS-3: Sent OSPF Packet
+NS-3: Received ARP Request
+NS-3: Sent ARP Response
 NS-3: Sent ARP Request
 NS-3: Received ARP Response
 NS-3: Received ICMP Dest Unreachable
-NS-3: Received ICMP Echo Request
-NS-3: Sent ICMP Echo Reply
-NS-3: Received ARP Request
-NS-3: Sent ARP Response
-NS-3: Received ICMP Echo Request
-NS-3: Sent ICMP Echo Reply
+NS-3: Received OSPF Packet
+NS-3: Sent OSPF Packet
+NS-3: Received OSPF Packet
+NS-3: Sent OSPF Packet
+...
 Simulation run ended
 Simulation destroyed
 ```
 
-### 5. Verify Client-Side Logs
-Check the logs of the `client` container to verify it captured the ARP and ICMP packets:
+### 2. Verify Client-Side Logs
+Check the logs of the `client` container to verify that Hello packets are being bidirectionally exchanged:
 ```bash
-docker logs client
+docker compose logs client | tail -n 25
+```
+Output shows:
+```
+client  | Client: Sent OSPF Packet - 10.10.0.2 -> 224.0.0.5
+client  | Client: Received OSPF Packet - 10.10.0.1 -> 224.0.0.5
+client  | Client: Received ARP Request - Who has 10.10.0.2? Tell 10.10.0.1
+client  | Client: Sent ARP Response - 10.10.0.2 is at 00:00:00:00:00:02
+client  | Client: Sent OSPF Packet - 10.10.0.2 -> 224.0.0.5
+client  | Client: Received OSPF Packet - 10.10.0.1 -> 224.0.0.5
 ```
 
-Output:
+### 3. Verify OSPF Neighbor Status
+Check the OSPF neighbor status on the client's FRR router:
+```bash
+docker exec client vtysh -c "show ip ospf neighbor"
 ```
-Client: Received ARP Request - Who has 10.10.0.2? Tell 10.10.0.1
-Client: Sent ARP Response - 10.10.0.2 is at 00:00:00:00:00:02
-Client: Sent ICMP Dest Unreachable from 10.10.0.2
-Client: Sent ICMP Echo Request - 10.10.0.2 -> 10.10.0.1
-Client: Received ICMP Echo Reply - 10.10.0.1 -> 10.10.0.2
-Client: Sent ARP Request - Who has 10.10.0.1? Tell 10.10.0.2
-Client: Received ARP Response - 10.10.0.1 is at 00:00:00:00:00:01
-Client: Sent ICMP Echo Request - 10.10.0.2 -> 10.10.0.1
-Client: Received ICMP Echo Reply - 10.10.0.1 -> 10.10.0.2
+During the active simulation run, this command will output the established adjacency in the `Full` state:
+```
+Neighbor ID     Pri State           Up Time         Dead Time Address         Interface                        RXmtL RqstL DBsmL
+10.10.0.1         1 Full/Backup     39.991s           10.081s 10.10.0.1       nk2:10.10.0.2                        0     0     0
 ```
 
-### 6. Verify Traffic via tcpdump
-To verify the bidirectional ARP and ICMP transaction packet capture, run tcpdump against the generated pcap file:
+### 4. Verify Traffic via tcpdump
+To inspect the packet captures generated by the simulator, run tcpdump against the pcap file:
 ```bash
-docker exec ns3-simulator tcpdump -e -n -r /app/ns-3/arp-connection-0-0.pcap
+docker exec ns3-simulator tcpdump -vv -x -r /app/ns-3/ospf-connection-0-0.pcap
 ```
