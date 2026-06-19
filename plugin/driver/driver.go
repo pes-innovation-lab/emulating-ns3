@@ -65,43 +65,33 @@ func (n *NetlinkPairDriver) CreateEndpoint(req *nw_sdk.CreateEndpointRequest) (*
 		return nil, err
 	}
 
-	if network.Pair == nil {
-		ifNameA := fmt.Sprintf("nk-%s%s-a", req.NetworkID[:4], req.EndpointID[:4])
-		ifNameB := fmt.Sprintf("nk-%s%s-b", req.NetworkID[:4], req.EndpointID[:4])
-
-		slog.Debug("CreateEndpoint: creating netkit pair", "networkName", network.NetworkName, "ifNameA", ifNameA, "ifNameB", ifNameB)
-		err := createNetkitPair(ifNameA, ifNameB)
-		if err != nil {
-			slog.Error("CreateEndpoint: failed to create netkit pair", "networkName", network.NetworkName, "ifNameA", ifNameA, "ifNameB", ifNameB, "error", err)
-			return nil, fmt.Errorf("failed to create netkit pair (%s, %s): %w", ifNameA, ifNameB, err)
-		}
-
-		ep := &NetkitEndpoint{
-			EndpointID:    req.EndpointID,
-			InterfaceName: ifNameA,
-		}
+	makeEndpoint := func() *NetkitEndpoint {
+		ep := &NetkitEndpoint{EndpointID: req.EndpointID}
 		if req.Interface != nil {
 			ep.IPAddress = req.Interface.Address
 			ep.MACAddress = req.Interface.MacAddress
 		}
-		network.Pair = &NetkitPair{SideA: ep}
+		return ep
+	}
 
-		slog.Info("CreateEndpoint: SideA created", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ifNameA, "ip", ep.IPAddress, "mac", ep.MACAddress)
+	if network.Pair == nil || network.Pair.SideA == nil {
+		ep := makeEndpoint()
+		if network.Pair == nil {
+			network.Pair = &NetkitPair{SideA: ep}
+		} else {
+			network.Pair.SideA = ep
+		}
+		slog.Info("CreateEndpoint: SideA created", "networkName", network.NetworkName, "endpointID", req.EndpointID, "ip", ep.IPAddress, "mac", ep.MACAddress)
 		return &nw_sdk.CreateEndpointResponse{}, nil
 
-	} else if network.Pair.SideA != nil && network.Pair.SideB == nil {
-		ifNameB := fmt.Sprintf("nk-%s%s-b", req.NetworkID[:4], network.Pair.SideA.EndpointID[:4])
-		ep := &NetkitEndpoint{
-			EndpointID:    req.EndpointID,
-			InterfaceName: ifNameB,
-		}
-		if req.Interface != nil {
-			ep.IPAddress = req.Interface.Address
-			ep.MACAddress = req.Interface.MacAddress
+	} else if network.Pair.SideB == nil {
+		ep := makeEndpoint()
+		if network.Pair.SideA.InterfaceName != "" {
+			// pair already created by SideA's Join; pre-assign peer interface name
+			ep.InterfaceName = fmt.Sprintf("nk-%s%s-b", req.NetworkID[:4], network.Pair.SideA.EndpointID[:4])
 		}
 		network.Pair.SideB = ep
-
-		slog.Info("CreateEndpoint: SideB created", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ifNameB, "ip", ep.IPAddress, "mac", ep.MACAddress)
+		slog.Info("CreateEndpoint: SideB created", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "ip", ep.IPAddress, "mac", ep.MACAddress)
 		return &nw_sdk.CreateEndpointResponse{}, nil
 
 	} else {
@@ -155,6 +145,38 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 		return nil, err
 	}
 
+	needsPair := ep.InterfaceName == ""
+	if !needsPair {
+		exists, err := linkExistsInHost(ep.InterfaceName)
+		if err != nil {
+			slog.Error("Join: failed to probe interface", "networkName", network.NetworkName, "interface", ep.InterfaceName, "error", err)
+			return nil, fmt.Errorf("failed to probe interface '%s': %w", ep.InterfaceName, err)
+		}
+		if !exists {
+			slog.Debug("Join: interface gone, recreating pair", "networkName", network.NetworkName, "interface", ep.InterfaceName)
+			needsPair = true
+		}
+	}
+
+	if needsPair {
+		if network.Pair.SideA == nil {
+			err := fmt.Errorf("cannot create pair on '%s': SideA not registered", network.NetworkName)
+			slog.Error("Join failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
+			return nil, err
+		}
+		ifNameA := fmt.Sprintf("nk-%s%s-a", req.NetworkID[:4], network.Pair.SideA.EndpointID[:4])
+		ifNameB := fmt.Sprintf("nk-%s%s-b", req.NetworkID[:4], network.Pair.SideA.EndpointID[:4])
+		slog.Debug("Join: creating netkit pair", "networkName", network.NetworkName, "ifNameA", ifNameA, "ifNameB", ifNameB)
+		if err := createNetkitPair(ifNameA, ifNameB); err != nil {
+			slog.Error("Join: failed to create netkit pair", "networkName", network.NetworkName, "error", err)
+			return nil, fmt.Errorf("failed to create netkit pair: %w", err)
+		}
+		network.Pair.SideA.InterfaceName = ifNameA
+		if network.Pair.SideB != nil {
+			network.Pair.SideB.InterfaceName = ifNameB
+		}
+	}
+
 	// Set promiscuous mode while the link is still in the host namespace.
 	slog.Debug("Join: setting promiscuous mode", "networkName", network.NetworkName, "interface", ep.InterfaceName)
 	if err := setLinkPromiscuous(ep.InterfaceName); err != nil {
@@ -200,6 +222,9 @@ func (n *NetlinkPairDriver) Leave(req *nw_sdk.LeaveRequest) error {
 	}
 
 	ep.Joined = false
+	if peer := network.Pair.findPeer(ep); peer != nil {
+		peer.Joined = false
+	}
 	slog.Info("Leave: endpoint left", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
 	return nil
 }
@@ -228,11 +253,13 @@ func (n *NetlinkPairDriver) DeleteEndpoint(req *nw_sdk.DeleteEndpointRequest) er
 		return err
 	}
 
-	// attempt to delete the host-side interface
-	slog.Debug("DeleteEndpoint: deleting link from host namespace", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
-	if err := delLinkInHost(ep.InterfaceName); err != nil {
-		slog.Error("DeleteEndpoint: failed to delete link", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "error", err)
-		return fmt.Errorf("unable to delete link '%s': %w", ep.InterfaceName, err)
+	if ep.InterfaceName != "" {
+		// attempt to delete the host-side interface
+		slog.Debug("DeleteEndpoint: deleting link from host namespace", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
+		if err := delLinkInHost(ep.InterfaceName); err != nil {
+			slog.Error("DeleteEndpoint: failed to delete link", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "error", err)
+			return fmt.Errorf("unable to delete link '%s': %w", ep.InterfaceName, err)
+		}
 	}
 
 	if network.Pair.SideA == ep {
