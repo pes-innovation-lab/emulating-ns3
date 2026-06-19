@@ -4,12 +4,9 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"net"
 	"regexp"
-	"runtime"
 
 	"github.com/vishvananda/netlink"
-	"github.com/vishvananda/netns"
 )
 
 func (p *NetkitPair) findEndpoint(endpointID string) *NetkitEndpoint {
@@ -66,101 +63,16 @@ func createNetkitPair(hostName, peerName string) error {
 	return nil
 }
 
-func moveToContainerNetns(interfaceName, namespacePath string) error {
-	slog.Debug("moveToContainerNetns", "interface", interfaceName, "namespace", namespacePath)
-
-	containerNamespace, err := netns.GetFromPath(namespacePath)
-	if err != nil {
-		return fmt.Errorf("error opening container namespace %s: %w", namespacePath, err)
-	}
-	defer containerNamespace.Close()
-
+// required for EmuFdNetDeviceHelper to receive all frames
+// persists when Docker moves the link
+func setLinkPromiscuous(interfaceName string) error {
 	link, err := netlink.LinkByName(interfaceName)
 	if err != nil {
-		return fmt.Errorf("error finding link %s in host namespace: %w", interfaceName, err)
+		return fmt.Errorf("error finding link %s: %w", interfaceName, err)
 	}
-
-	slog.Debug("moveToContainerNetns: moving link to container namespace", "interface", interfaceName)
-	if err := netlink.LinkSetNsFd(link, int(containerNamespace)); err != nil {
-		return fmt.Errorf("error moving link %s to container namespace: %w", interfaceName, err)
+	if err := netlink.SetPromiscOn(link); err != nil {
+		return fmt.Errorf("error setting promiscuous on %s: %w", interfaceName, err)
 	}
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	originalNamespace, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("error getting host namespace: %w", err)
-	}
-	defer originalNamespace.Close()
-
-	err = netns.Set(containerNamespace)
-	if err != nil {
-		return fmt.Errorf("error switching to container namespace %s: %w", namespacePath, err)
-	}
-	defer netns.Set(originalNamespace)
-
-	link, err = netlink.LinkByName(interfaceName)
-	if err != nil {
-		return fmt.Errorf("error finding link %s in container namespace: %w", interfaceName, err)
-	}
-
-	slog.Debug("moveToContainerNetns: bringing link up", "interface", interfaceName)
-	err = netlink.LinkSetUp(link)
-	if err != nil {
-		return fmt.Errorf("error setting up link %s: %w", interfaceName, err)
-	}
-
-	// accept all frames regardless of destination MAC, required by EmuFdNetDeviceHelper
-	slog.Debug("moveToContainerNetns: setting promiscuous mode", "interface", interfaceName)
-	err = netlink.SetPromiscOn(link)
-	if err != nil {
-		return fmt.Errorf("error setting link %s promiscuous: %w", interfaceName, err)
-	}
-
-	slog.Debug("moveToContainerNetns: done", "interface", interfaceName, "namespace", namespacePath)
-	return nil
-}
-
-func delLinkInNetns(interfaceName, namespacePath string) error {
-	slog.Debug("delLinkInNetns", "interface", interfaceName, "namespace", namespacePath)
-
-	containerNamespace, err := netns.GetFromPath(namespacePath)
-	if err != nil {
-		return fmt.Errorf("error opening container namespace %s: %w", namespacePath, err)
-	}
-	defer containerNamespace.Close()
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	originalNamespace, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("error getting host namespace: %w", err)
-	}
-	defer originalNamespace.Close()
-
-	err = netns.Set(containerNamespace)
-	if err != nil {
-		return fmt.Errorf("error switching to container namespace %s: %w", namespacePath, err)
-	}
-	defer netns.Set(originalNamespace)
-
-	link, err := netlink.LinkByName(interfaceName)
-	if err != nil {
-		if errors.As(err, &netlink.LinkNotFoundError{}) {
-			slog.Debug("delLinkInNetns: link already gone", "interface", interfaceName)
-			return nil
-		}
-		return fmt.Errorf("error finding link %s in container namespace: %w", interfaceName, err)
-	}
-
-	err = netlink.LinkDel(link)
-	if err != nil {
-		return fmt.Errorf("error deleting link %s: %w", interfaceName, err)
-	}
-
-	slog.Debug("delLinkInNetns: done", "interface", interfaceName)
 	return nil
 }
 
@@ -182,104 +94,5 @@ func delLinkInHost(interfaceName string) error {
 	}
 
 	slog.Debug("delLinkInHost: done", "interface", interfaceName)
-	return nil
-}
-
-func setAddrInNetns(interfaceName, namespacePath, ipAddr, macAddr string) error {
-	slog.Debug("setAddrInNetns", "interface", interfaceName, "namespace", namespacePath, "ip", ipAddr, "mac", macAddr)
-
-	addr, err := netlink.ParseAddr(ipAddr)
-	if err != nil {
-		return fmt.Errorf("failed to parse IP addr '%s': %w", ipAddr, err)
-	}
-
-	hwaddr, err := net.ParseMAC(macAddr)
-	if err != nil {
-		return fmt.Errorf("failed to parse MAC addr '%s': %w", macAddr, err)
-	}
-
-	containerNamespace, err := netns.GetFromPath(namespacePath)
-	if err != nil {
-		return fmt.Errorf("error opening container namespace %s: %w", namespacePath, err)
-	}
-	defer containerNamespace.Close()
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	originalNamespace, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("error getting host namespace: %w", err)
-	}
-	defer originalNamespace.Close()
-
-	err = netns.Set(containerNamespace)
-	if err != nil {
-		return fmt.Errorf("error switching to container namespace %s: %w", namespacePath, err)
-	}
-	defer netns.Set(originalNamespace)
-
-	link, err := netlink.LinkByName(interfaceName)
-	if err != nil {
-		return fmt.Errorf("error finding link %s in container namespace: %w", interfaceName, err)
-	}
-
-	err = netlink.AddrAdd(link, addr)
-	if err != nil {
-		return fmt.Errorf("error adding IP addr %s to link %s: %w", ipAddr, interfaceName, err)
-	}
-
-	err = netlink.LinkSetHardwareAddr(link, hwaddr)
-	if err != nil {
-		return fmt.Errorf("error setting MAC addr %s on link %s: %w", macAddr, interfaceName, err)
-	}
-
-	slog.Debug("setAddrInNetns: done", "interface", interfaceName, "ip", ipAddr, "mac", macAddr)
-	return nil
-}
-
-func leaveInNetns(interfaceName, namespacePath string) error {
-	slog.Debug("leaveInNetns", "interface", interfaceName, "namespace", namespacePath)
-
-	containerNamespace, err := netns.GetFromPath(namespacePath)
-	if err != nil {
-		return fmt.Errorf("error opening container namespace %s: %w", namespacePath, err)
-	}
-	defer containerNamespace.Close()
-
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-
-	originalNamespace, err := netns.Get()
-	if err != nil {
-		return fmt.Errorf("error getting host namespace: %w", err)
-	}
-	defer originalNamespace.Close()
-
-	err = netns.Set(containerNamespace)
-	if err != nil {
-		return fmt.Errorf("error switching to container namespace %s: %w", namespacePath, err)
-	}
-	defer netns.Set(originalNamespace)
-
-	link, err := netlink.LinkByName(interfaceName)
-	if err != nil {
-		return fmt.Errorf("error finding link %s in container namespace: %w", interfaceName, err)
-	}
-
-	addrs, err := netlink.AddrList(link, netlink.FAMILY_V4)
-	if err != nil {
-		return fmt.Errorf("error listing addrs on link %s: %w", interfaceName, err)
-	}
-
-	slog.Debug("leaveInNetns: removing addrs", "interface", interfaceName, "count", len(addrs))
-	for _, addr := range addrs {
-		err := netlink.AddrDel(link, &addr)
-		if err != nil {
-			return fmt.Errorf("error removing IP addr %s from link %s: %w", addr.IP, interfaceName, err)
-		}
-	}
-
-	slog.Debug("leaveInNetns: done", "interface", interfaceName)
 	return nil
 }

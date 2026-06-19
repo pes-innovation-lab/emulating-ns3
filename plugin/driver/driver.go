@@ -151,24 +151,15 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 
 	switch ep.NamespacePath {
 	case "":
-		slog.Debug("Join: moving link to container netns", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "namespace", req.SandboxKey)
-		err := moveToContainerNetns(ep.InterfaceName, req.SandboxKey)
-		if err != nil {
-			slog.Error("Join: failed to move link to namespace", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "namespace", req.SandboxKey, "error", err)
-			return nil, fmt.Errorf("error moving link to namespace: %w", err)
+		// Set promiscuous mode while the link is still in the host namespace.
+		slog.Debug("Join: setting promiscuous mode", "networkName", network.NetworkName, "interface", ep.InterfaceName)
+		if err := setLinkPromiscuous(ep.InterfaceName); err != nil {
+			slog.Error("Join: failed to set promiscuous", "networkName", network.NetworkName, "interface", ep.InterfaceName, "error", err)
+			return nil, fmt.Errorf("error setting promiscuous on link '%s': %w", ep.InterfaceName, err)
 		}
 		ep.NamespacePath = req.SandboxKey
 
-		if ep.IPAddress != "" && ep.MACAddress != "" {
-			slog.Debug("Join: setting addr in netns", "networkName", network.NetworkName, "interface", ep.InterfaceName, "ip", ep.IPAddress, "mac", ep.MACAddress)
-			err := setAddrInNetns(ep.InterfaceName, ep.NamespacePath, ep.IPAddress, ep.MACAddress)
-			if err != nil {
-				slog.Error("Join: failed to set addr on link", "networkName", network.NetworkName, "interface", ep.InterfaceName, "ip", ep.IPAddress, "mac", ep.MACAddress, "error", err)
-				return nil, fmt.Errorf("error setting addr on link '%s': %w", ep.InterfaceName, err)
-			}
-		}
-
-		slog.Info("Join: endpoint joined", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "dstPrefix", dstPrefix, "gateway", gateway)
+		slog.Info("Join: endpoint ready", "networkName", network.NetworkName, "endpointID", req.EndpointID, "srcName", ep.InterfaceName, "dstPrefix", dstPrefix, "gateway", gateway)
 		return &nw_sdk.JoinResponse{
 			InterfaceName: nw_sdk.InterfaceName{
 				SrcName:   ep.InterfaceName,
@@ -221,17 +212,6 @@ func (n *NetlinkPairDriver) Leave(req *nw_sdk.LeaveRequest) error {
 		slog.Error("Leave failed", "networkName", network.NetworkName, "endpointID", req.EndpointID, "error", err)
 		return err
 	}
-	if ep.NamespacePath == "" {
-		slog.Debug("Leave: endpoint not in any namespace, nothing to do", "networkName", network.NetworkName, "endpointID", req.EndpointID)
-		return nil
-	}
-
-	slog.Debug("Leave: removing addrs from link", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "namespace", ep.NamespacePath)
-	err := leaveInNetns(ep.InterfaceName, ep.NamespacePath)
-	if err != nil {
-		slog.Error("Leave: failed to remove addrs from link", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "error", err)
-		return fmt.Errorf("unable to remove addr from link '%s': %w", ep.InterfaceName, err)
-	}
 
 	ep.NamespacePath = ""
 	slog.Info("Leave: endpoint left", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
@@ -262,14 +242,11 @@ func (n *NetlinkPairDriver) DeleteEndpoint(req *nw_sdk.DeleteEndpointRequest) er
 		return err
 	}
 
-	if ep.NamespacePath != "" {
-		slog.Debug("DeleteEndpoint: deleting link from netns", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "namespace", ep.NamespacePath)
-		err := delLinkInNetns(ep.InterfaceName, ep.NamespacePath)
-		if err != nil {
-			slog.Error("DeleteEndpoint: failed to delete link", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "namespace", ep.NamespacePath, "error", err)
-			return fmt.Errorf("unable to delete link '%s': %w", ep.InterfaceName, err)
-		}
-		ep.NamespacePath = ""
+	// attempt to delete the host-side interface
+	slog.Debug("DeleteEndpoint: deleting link from host namespace", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
+	if err := delLinkInHost(ep.InterfaceName); err != nil {
+		slog.Error("DeleteEndpoint: failed to delete link", "networkName", network.NetworkName, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "error", err)
+		return fmt.Errorf("unable to delete link '%s': %w", ep.InterfaceName, err)
 	}
 
 	if network.Pair.SideA == ep {
@@ -299,36 +276,17 @@ func (n *NetlinkPairDriver) DeleteNetwork(req *nw_sdk.DeleteNetworkRequest) erro
 	}
 
 	if network.Pair != nil {
+		// Safety net: endpoints should have been cleaned up via DeleteEndpoint
 		if network.Pair.SideA != nil {
-			if network.Pair.SideA.NamespacePath != "" {
-				slog.Debug("DeleteNetwork: deleting SideA from netns", "networkName", network.NetworkName, "interface", network.Pair.SideA.InterfaceName, "namespace", network.Pair.SideA.NamespacePath)
-				err := delLinkInNetns(network.Pair.SideA.InterfaceName, network.Pair.SideA.NamespacePath)
-				if err != nil {
-					slog.Error("DeleteNetwork: failed to delete SideA from netns", "networkName", network.NetworkName, "interface", network.Pair.SideA.InterfaceName, "error", err)
-					return fmt.Errorf("unable to delete link '%s': %w", network.Pair.SideA.InterfaceName, err)
-				}
-				network.Pair.SideA.NamespacePath = ""
-			} else {
-				slog.Debug("DeleteNetwork: deleting SideA from host", "networkName", network.NetworkName, "interface", network.Pair.SideA.InterfaceName)
-				if err := delLinkInHost(network.Pair.SideA.InterfaceName); err != nil {
-					slog.Warn("DeleteNetwork: failed to delete SideA from host namespace (interface leaked)", "networkName", network.NetworkName, "interface", network.Pair.SideA.InterfaceName, "error", err)
-				}
+			slog.Warn("DeleteNetwork: SideA endpoint not cleaned up, forcing delete", "networkName", network.NetworkName, "interface", network.Pair.SideA.InterfaceName)
+			if err := delLinkInHost(network.Pair.SideA.InterfaceName); err != nil {
+				slog.Warn("DeleteNetwork: failed to delete SideA (likely in container, will clean up on sandbox teardown)", "networkName", network.NetworkName, "interface", network.Pair.SideA.InterfaceName, "error", err)
 			}
 		}
 		if network.Pair.SideB != nil {
-			if network.Pair.SideB.NamespacePath != "" {
-				slog.Debug("DeleteNetwork: deleting SideB from netns", "networkName", network.NetworkName, "interface", network.Pair.SideB.InterfaceName, "namespace", network.Pair.SideB.NamespacePath)
-				err := delLinkInNetns(network.Pair.SideB.InterfaceName, network.Pair.SideB.NamespacePath)
-				if err != nil {
-					slog.Error("DeleteNetwork: failed to delete SideB from netns", "networkName", network.NetworkName, "interface", network.Pair.SideB.InterfaceName, "error", err)
-					return fmt.Errorf("unable to delete link '%s': %w", network.Pair.SideB.InterfaceName, err)
-				}
-				network.Pair.SideB.NamespacePath = ""
-			} else {
-				slog.Debug("DeleteNetwork: deleting SideB from host", "networkName", network.NetworkName, "interface", network.Pair.SideB.InterfaceName)
-				if err := delLinkInHost(network.Pair.SideB.InterfaceName); err != nil {
-					slog.Warn("DeleteNetwork: failed to delete SideB from host namespace (interface leaked)", "networkName", network.NetworkName, "interface", network.Pair.SideB.InterfaceName, "error", err)
-				}
+			slog.Warn("DeleteNetwork: SideB endpoint not cleaned up, forcing delete", "networkName", network.NetworkName, "interface", network.Pair.SideB.InterfaceName)
+			if err := delLinkInHost(network.Pair.SideB.InterfaceName); err != nil {
+				slog.Warn("DeleteNetwork: failed to delete SideB (likely in container, will clean up on sandbox teardown)", "networkName", network.NetworkName, "interface", network.Pair.SideB.InterfaceName, "error", err)
 			}
 		}
 		network.Pair = nil
