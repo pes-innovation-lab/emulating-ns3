@@ -19,5 +19,9 @@ sudo docker rm -vf "$id"
 sudo docker rmi rootfsimage
 
 cd ..
+if sudo docker plugin inspect netkit-ns-3 >/dev/null 2>&1; then
+    sudo docker plugin disable -f netkit-ns-3 || true
+    sudo docker plugin rm -f netkit-ns-3
+fi
 sudo docker plugin create netkit-ns-3 ./plugin-data
 sudo docker plugin enable netkit-ns-3

@@ -9,7 +9,7 @@
     "types": ["docker.networkdriver/1.0"]
   },
   "linux": {
-    "capabilities": ["CAP_NET_ADMIN", "CAP_SYS_ADMIN"]
+    "capabilities": ["CAP_NET_ADMIN"]
   },
   "entrypoint": ["/netkit-driver"],
   "env": [
