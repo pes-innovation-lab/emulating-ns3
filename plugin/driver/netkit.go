@@ -72,16 +72,22 @@ func createNetkitPair(hostName, peerName string) error {
 
 	peer, err := netlink.LinkByName(peerName)
 	if err != nil {
-		netlink.LinkDel(netkit)
+		if err := netlink.LinkDel(netkit); err != nil {
+			slog.Warn("createNetkitPair: cleanup failed after peer lookup error", "name", hostName, "error", err)
+		}
 		return fmt.Errorf("error finding peer %s: %w", peerName, err)
 	}
 
 	if err = netlink.LinkSetUp(netkit); err != nil {
-		netlink.LinkDel(netkit)
+		if err := netlink.LinkDel(netkit); err != nil {
+			slog.Warn("createNetkitPair: cleanup failed after LinkSetUp error", "name", hostName, "error", err)
+		}
 		return fmt.Errorf("error bringing up %s: %w", hostName, err)
 	}
 	if err = netlink.LinkSetUp(peer); err != nil {
-		netlink.LinkDel(netkit)
+		if err := netlink.LinkDel(netkit); err != nil {
+			slog.Warn("createNetkitPair: cleanup failed after peer LinkSetUp error", "name", hostName, "error", err)
+		}
 		return fmt.Errorf("error bringing up %s: %w", peerName, err)
 	}
 
