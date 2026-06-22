@@ -28,7 +28,7 @@ func (n *NetlinkPairDriver) CreateNetwork(req *nw_sdk.CreateNetworkRequest) erro
 		return err
 	}
 
-	ifPrefix := req.NetworkID[:16]
+	ifPrefix := req.NetworkID[:min(len(req.NetworkID), 16)]
 	metadata, ok := req.Options["com.docker.network.generic"].(map[string]any)
 	if ok {
 		name, ok := metadata["if-prefix"].(string)
@@ -88,7 +88,7 @@ func (n *NetlinkPairDriver) CreateEndpoint(req *nw_sdk.CreateEndpointRequest) (*
 		ep := makeEndpoint()
 		if network.Pair.SideA.InterfaceName != "" {
 			// pair already created by SideA's Join; pre-assign peer interface name
-			ep.InterfaceName = fmt.Sprintf("nk-%s%s-b", req.NetworkID[:4], network.Pair.SideA.EndpointID[:4])
+			ep.InterfaceName = fmt.Sprintf("nk-%s%s-b", req.NetworkID[:min(len(req.NetworkID), 4)], network.Pair.SideA.EndpointID[:min(len(network.Pair.SideA.EndpointID), 4)])
 		}
 		network.Pair.SideB = ep
 		slog.Info("CreateEndpoint: SideB created", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "ip", ep.IPAddress, "mac", ep.MACAddress)
@@ -166,8 +166,8 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 			slog.Error("Join failed", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "error", err)
 			return nil, err
 		}
-		ifNameA := fmt.Sprintf("nk-%s%s-a", req.NetworkID[:4], network.Pair.SideA.EndpointID[:4])
-		ifNameB := fmt.Sprintf("nk-%s%s-b", req.NetworkID[:4], network.Pair.SideA.EndpointID[:4])
+		ifNameA := fmt.Sprintf("nk-%s%s-a", req.NetworkID[:min(len(req.NetworkID), 4)], network.Pair.SideA.EndpointID[:min(len(network.Pair.SideA.EndpointID), 4)])
+		ifNameB := fmt.Sprintf("nk-%s%s-b", req.NetworkID[:min(len(req.NetworkID), 4)], network.Pair.SideA.EndpointID[:min(len(network.Pair.SideA.EndpointID), 4)])
 		slog.Debug("Join: creating netkit pair", "ifPrefix", network.InterfacePrefix, "ifNameA", ifNameA, "ifNameB", ifNameB)
 		if err := createNetkitPair(ifNameA, ifNameB); err != nil {
 			slog.Error("Join: failed to create netkit pair", "ifPrefix", network.InterfacePrefix, "error", err)
