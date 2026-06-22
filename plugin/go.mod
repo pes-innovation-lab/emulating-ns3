@@ -1,6 +1,6 @@
 module github.com/pes-innovation-lab/ns-3-docker-network
 
-go 1.26.4
+go 1.26
 
 require (
 	github.com/docker/go-plugins-helpers v0.0.0-20240701071450-45e2431495c8

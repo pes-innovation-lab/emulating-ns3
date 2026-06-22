@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 
+set -euo pipefail
+
 cd ./plugin || {
     echo "missing plugin dir" >&2
     exit 1
