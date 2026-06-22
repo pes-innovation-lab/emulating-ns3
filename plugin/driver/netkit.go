@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+
 	"github.com/vishvananda/netlink"
 )
 
@@ -52,11 +53,15 @@ func createNetkitPair(hostName, peerName string) error {
 
 	if existing, lerr := netlink.LinkByName(hostName); lerr == nil {
 		slog.Warn("createNetkitPair: stale interface, deleting", "name", hostName)
-		netlink.LinkDel(existing)
+		if err := netlink.LinkDel(existing); err != nil {
+			return fmt.Errorf("error deleting stale interface %s: %w", hostName, err)
+		}
 	} else if existing, lerr := netlink.LinkByName(peerName); lerr == nil {
 		// peer returned to host namespace on disconnect; deleting it destroys both sides
 		slog.Warn("createNetkitPair: stale peer, deleting", "name", peerName)
-		netlink.LinkDel(existing)
+		if err := netlink.LinkDel(existing); err != nil {
+			return fmt.Errorf("error deleting stale peer interface %s: %w", peerName, err)
+		}
 	}
 
 	if err := netlink.LinkAdd(netkit); err != nil {
