@@ -224,9 +224,6 @@ func (n *NetlinkPairDriver) Leave(req *nw_sdk.LeaveRequest) error {
 	}
 
 	ep.Joined = false
-	if peer := network.Pair.findPeer(ep); peer != nil {
-		peer.Joined = false
-	}
 	slog.Info("Leave: endpoint left", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
 	return nil
 }
@@ -255,12 +252,13 @@ func (n *NetlinkPairDriver) DeleteEndpoint(req *nw_sdk.DeleteEndpointRequest) er
 		return err
 	}
 
+	var deleteErr error
 	if ep.InterfaceName != "" {
 		// attempt to delete the host-side interface
 		slog.Debug("DeleteEndpoint: deleting link from host namespace", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
 		if err := delLinkInHost(ep.InterfaceName); err != nil {
 			slog.Error("DeleteEndpoint: failed to delete link", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "error", err)
-			return fmt.Errorf("unable to delete link '%s': %w", ep.InterfaceName, err)
+			deleteErr = fmt.Errorf("unable to delete link '%s': %w", ep.InterfaceName, err)
 		}
 	}
 
@@ -274,7 +272,7 @@ func (n *NetlinkPairDriver) DeleteEndpoint(req *nw_sdk.DeleteEndpointRequest) er
 	}
 
 	slog.Info("DeleteEndpoint: endpoint deleted", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName)
-	return nil
+	return deleteErr
 }
 
 func (n *NetlinkPairDriver) DeleteNetwork(req *nw_sdk.DeleteNetworkRequest) error {
