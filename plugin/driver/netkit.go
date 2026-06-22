@@ -9,6 +9,8 @@ import (
 	"github.com/vishvananda/netlink"
 )
 
+var netRegex = regexp.MustCompile("[^a-zA-Z0-9]+")
+
 func (p *NetkitPair) findEndpoint(endpointID string) *NetkitEndpoint {
 	if p.SideA != nil && p.SideA.EndpointID == endpointID {
 		return p.SideA
@@ -27,7 +29,7 @@ func (p *NetkitPair) findPeer(ep *NetkitEndpoint) *NetkitEndpoint {
 }
 
 func sanitiseInterfaceName(ifname string) string {
-	name := regexp.MustCompile("[^a-zA-Z0-9]+").ReplaceAllString(ifname, "_")
+	name := netRegex.ReplaceAllString(ifname, "_")
 	if len(name) > 14 {
 		return name[:14]
 	}
