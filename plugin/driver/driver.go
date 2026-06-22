@@ -137,6 +137,8 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 		return nil, err
 	}
 
+	ep.Gateway = gateway
+
 	dstPrefix := sanitiseInterfaceName(network.InterfacePrefix)
 
 	if ep.Joined {
