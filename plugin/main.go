@@ -19,7 +19,7 @@ func main() {
 		level = slog.LevelError
 	}
 
-	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})))
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 
 	d := driver.NetlinkPairDriver{
 		Networks: make(map[string]*driver.NetkitNetwork),
