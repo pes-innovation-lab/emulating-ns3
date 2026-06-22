@@ -20,14 +20,7 @@
       "settable": ["value"]
     }
   ],
-  "mounts": [
-    {
-      "source": "/run/docker/netns",
-      "destination": "/run/docker/netns",
-      "type": "bind",
-      "options": ["rbind", "rshared"]
-    }
-  ],
+  "mounts": null,
   "ipchost": false,
   "pidhost": false,
   "propagatedMount": "",
