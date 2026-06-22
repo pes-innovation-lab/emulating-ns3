@@ -29,11 +29,8 @@ func (p *NetkitPair) findPeer(ep *NetkitEndpoint) *NetkitEndpoint {
 }
 
 func sanitiseInterfaceName(ifname string) string {
-	name := netRegex.ReplaceAllString(ifname, "_")
-	if len(name) > 14 {
-		return name[:14]
-	}
-	return name
+	// 14 characters to account for NUL terminator
+	return netRegex.ReplaceAllString(ifname, "_")[:min(len(netRegex.ReplaceAllString(ifname, "_")), 14)]
 }
 
 func createNetkitPair(hostName, peerName string) error {
