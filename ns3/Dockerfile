@@ -44,6 +44,7 @@ RUN mkdir -p /app && cd /tmp && \
     curl -O https://www.nsnam.org/releases/${VERSION}.tar.bz2 && \
     tar -xaf ${VERSION}.tar.bz2 && \
     mv ${VERSION} /app/ns-3
+COPY sctp /app/ns-3/src/sctp
 RUN python3 -m venv /app/pyenv
 RUN cd /app/ns-3 && . /app/pyenv/bin/activate && \
     ./ns3 configure --build-profile=${BUILD_PROF} && \
