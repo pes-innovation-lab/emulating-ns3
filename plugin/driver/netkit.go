@@ -1,0 +1,141 @@
+package driver
+
+import (
+	"errors"
+	"fmt"
+	"log/slog"
+	"regexp"
+
+	"github.com/vishvananda/netlink"
+)
+
+var netRegex = regexp.MustCompile("[^a-zA-Z0-9]+")
+
+func (p *NetkitPair) findEndpoint(endpointID string) *NetkitEndpoint {
+	if p.SideA != nil && p.SideA.EndpointID == endpointID {
+		return p.SideA
+	}
+	if p.SideB != nil && p.SideB.EndpointID == endpointID {
+		return p.SideB
+	}
+	return nil
+}
+
+func (p *NetkitPair) findPeer(ep *NetkitEndpoint) *NetkitEndpoint {
+	if p.SideA == ep {
+		return p.SideB
+	}
+	return p.SideA
+}
+
+func sanitiseInterfaceName(ifname string) string {
+	// 14 characters to account for NUL terminator
+	return netRegex.ReplaceAllString(ifname, "_")[:min(len(netRegex.ReplaceAllString(ifname, "_")), 14)]
+}
+
+func createNetkitPair(hostName, peerName string) error {
+	slog.Debug("createNetkitPair", "hostName", hostName, "peerName", peerName)
+
+	attrs := netlink.NewLinkAttrs()
+	attrs.Name = hostName
+
+	netkit := &netlink.Netkit{
+		LinkAttrs:  attrs,
+		Mode:       netlink.NETKIT_MODE_L2,
+		Policy:     netlink.NETKIT_POLICY_FORWARD,
+		PeerPolicy: netlink.NETKIT_POLICY_FORWARD,
+	}
+
+	peerAttrs := netlink.NewLinkAttrs()
+	peerAttrs.Name = peerName
+	netkit.SetPeerAttrs(&peerAttrs)
+
+	if existing, lerr := netlink.LinkByName(hostName); lerr == nil {
+		slog.Warn("createNetkitPair: stale interface, deleting", "name", hostName)
+		if err := netlink.LinkDel(existing); err != nil {
+			return fmt.Errorf("error deleting stale interface %s: %w", hostName, err)
+		}
+	} else if existing, lerr := netlink.LinkByName(peerName); lerr == nil {
+		// peer returned to host namespace on disconnect; deleting it destroys both sides
+		slog.Warn("createNetkitPair: stale peer, deleting", "name", peerName)
+		if err := netlink.LinkDel(existing); err != nil {
+			return fmt.Errorf("error deleting stale peer interface %s: %w", peerName, err)
+		}
+	}
+
+	if err := netlink.LinkAdd(netkit); err != nil {
+		return fmt.Errorf("error creating netkit pair: %w", err)
+	}
+
+	peer, err := netlink.LinkByName(peerName)
+	if err != nil {
+		if err := netlink.LinkDel(netkit); err != nil {
+			slog.Warn("createNetkitPair: cleanup failed after peer lookup error", "name", hostName, "error", err)
+		}
+		return fmt.Errorf("error finding peer %s: %w", peerName, err)
+	}
+
+	if err = netlink.LinkSetUp(netkit); err != nil {
+		if err := netlink.LinkDel(netkit); err != nil {
+			slog.Warn("createNetkitPair: cleanup failed after LinkSetUp error", "name", hostName, "error", err)
+		}
+		return fmt.Errorf("error bringing up %s: %w", hostName, err)
+	}
+	if err = netlink.LinkSetUp(peer); err != nil {
+		if err := netlink.LinkDel(netkit); err != nil {
+			slog.Warn("createNetkitPair: cleanup failed after peer LinkSetUp error", "name", hostName, "error", err)
+		}
+		return fmt.Errorf("error bringing up %s: %w", peerName, err)
+	}
+
+	slog.Debug("createNetkitPair: done", "hostName", hostName, "peerName", peerName)
+	return nil
+}
+
+// required for EmuFdNetDeviceHelper to receive all frames
+// persists when Docker moves the link
+func setLinkPromiscuous(interfaceName string) error {
+	link, err := netlink.LinkByName(interfaceName)
+	if err != nil {
+		return fmt.Errorf("error finding link %s: %w", interfaceName, err)
+	}
+	if err := netlink.SetPromiscOn(link); err != nil {
+		return fmt.Errorf("error setting promiscuous on %s: %w", interfaceName, err)
+	}
+	return nil
+}
+
+func linkExistsInHost(interfaceName string) (bool, error) {
+	_, err := netlink.LinkByName(interfaceName)
+	if err == nil {
+		return true, nil
+	}
+	if errors.As(err, &netlink.LinkNotFoundError{}) {
+		return false, nil
+	}
+	return false, err
+}
+
+func delLinkInHost(interfaceName string) error {
+	if interfaceName == "" {
+		return nil
+	}
+	slog.Debug("delLinkInHost", "interface", interfaceName)
+
+	link, err := netlink.LinkByName(interfaceName)
+	if err != nil {
+		if errors.As(err, &netlink.LinkNotFoundError{}) {
+			slog.Debug("delLinkInHost: link already gone", "interface", interfaceName)
+			return nil
+		}
+		return fmt.Errorf("error finding link %s in host namespace: %w", interfaceName, err)
+	}
+
+	err = netlink.LinkDel(link)
+	if err != nil {
+		return fmt.Errorf("error deleting link %s: %w", interfaceName, err)
+	}
+
+	slog.Debug("delLinkInHost: done", "interface", interfaceName)
+	return nil
+}
