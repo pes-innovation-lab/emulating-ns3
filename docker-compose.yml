@@ -1,0 +1,52 @@
+networks:
+  sim_net:
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24
+    driver: pair-ns-3
+    driver_opts:
+      if-prefix: nk
+
+services:
+  ns3:
+    build:
+      context: ./ns3-node
+      dockerfile: Dockerfile
+      args:
+        - BUILD_PROF=debug
+        - GIT_URL="https://gitlab.com/nsnam/ns-3-dev.git"
+        - TAG=ns-3.48
+    container_name: ns3-simulator
+    networks:
+      sim_net:
+        ipv4_address: 10.10.0.1
+        mac_address: 00:00:00:00:00:01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW # needed on some systems
+    environment:
+      - BUILD_PROF=debug
+    volumes:
+      - ./ns3/scratch:/app/ns-3/scratch/scripts
+      - ./ns3/run_sim.sh:/app/ns-3/run_sim.sh
+    # Override this to run a simulation automatically on startup:
+    # command: ["/app/ns-3/run_sim.sh", "my-simulation"]
+    command: ["/app/ns-3/run_sim.sh"]
+
+  client:
+    build:
+      context: ./client-node
+      dockerfile: Dockerfile
+    container_name: client
+    networks:
+      sim_net:
+        ipv4_address: 10.10.0.2
+        mac_address: 00:00:00:00:00:02
+    working_dir: /app
+    volumes:
+      - ./client-node:/app
+    # Override the command (see the examples in README.md),
+    # or uncomment one of the lines below:
+    # command: ["sh", "examples/ping_ns3.sh"]
+    # command: ["python3", "my_app.py", "--flag", "value"]
+    command: ["/bin/sh"]
