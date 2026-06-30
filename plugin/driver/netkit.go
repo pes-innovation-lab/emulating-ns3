@@ -70,7 +70,8 @@ func createPair(hostName, peerName string, devtype DeviceType) error {
 		if err := netlink.LinkDel(existing); err != nil {
 			return fmt.Errorf("error deleting stale interface %s: %w", hostName, err)
 		}
-	} else if existing, lerr := netlink.LinkByName(peerName); lerr == nil {
+	}
+	if existing, lerr := netlink.LinkByName(peerName); lerr == nil {
 		// peer returned to host namespace on disconnect; deleting it destroys both sides
 		slog.Warn("createPair: stale peer, deleting", "name", peerName)
 		if err := netlink.LinkDel(existing); err != nil {
