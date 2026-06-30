@@ -22,8 +22,9 @@ func (p *DevicePair) findEndpoint(endpointID string) *PairEndpoint {
 }
 
 func sanitiseInterfaceName(ifname string) string {
-	// 14 characters to account for NUL terminator
-	return netRegex.ReplaceAllString(ifname, "_")[:min(len(netRegex.ReplaceAllString(ifname, "_")), 14)]
+	// 14 characters + Docker appends interface index (e.g. "0") + NUL terminator = 16
+	s := netRegex.ReplaceAllString(ifname, "_")
+	return s[:min(len(s), 14)]
 }
 
 func createPair(hostName, peerName string, devtype DeviceType) error {
@@ -78,7 +79,7 @@ func createPair(hostName, peerName string, devtype DeviceType) error {
 	}
 
 	if err := netlink.LinkAdd(device); err != nil {
-		return fmt.Errorf("error creating netkit pair: %w", err)
+		return fmt.Errorf("error creating pair: %w", err)
 	}
 
 	peer, err := netlink.LinkByName(peerName)
