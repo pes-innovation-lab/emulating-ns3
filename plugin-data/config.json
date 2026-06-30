@@ -1,5 +1,5 @@
 {
-  "description": "Docker plugin to set up ns-3 simulations using netkit L2 pairs",
+  "description": "Docker plugin to set up ns-3 simulations using paired network devices",
   "documentation": "https://github.com/pes-innovation-lab/emulating-ns3",
   "network": {
     "type": "host"
@@ -11,7 +11,7 @@
   "linux": {
     "capabilities": ["CAP_NET_ADMIN"]
   },
-  "entrypoint": ["/netkit-driver"],
+  "entrypoint": ["/pair-driver"],
   "env": [
     {
       "name": "LOG_LEVEL",

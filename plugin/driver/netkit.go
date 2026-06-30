@@ -11,7 +11,7 @@ import (
 
 var netRegex = regexp.MustCompile("[^a-zA-Z0-9]+")
 
-func (p *NetkitPair) findEndpoint(endpointID string) *NetkitEndpoint {
+func (p *DevicePair) findEndpoint(endpointID string) *PairEndpoint {
 	if p.SideA != nil && p.SideA.EndpointID == endpointID {
 		return p.SideA
 	}
@@ -21,74 +21,88 @@ func (p *NetkitPair) findEndpoint(endpointID string) *NetkitEndpoint {
 	return nil
 }
 
-func (p *NetkitPair) findPeer(ep *NetkitEndpoint) *NetkitEndpoint {
-	if p.SideA == ep {
-		return p.SideB
-	}
-	return p.SideA
-}
-
 func sanitiseInterfaceName(ifname string) string {
 	// 14 characters to account for NUL terminator
 	return netRegex.ReplaceAllString(ifname, "_")[:min(len(netRegex.ReplaceAllString(ifname, "_")), 14)]
 }
 
-func createNetkitPair(hostName, peerName string) error {
-	slog.Debug("createNetkitPair", "hostName", hostName, "peerName", peerName)
+func createPair(hostName, peerName string, devtype DeviceType) error {
+	slog.Debug("createPair", "hostName", hostName, "peerName", peerName)
 
 	attrs := netlink.NewLinkAttrs()
 	attrs.Name = hostName
 
-	netkit := &netlink.Netkit{
-		LinkAttrs:  attrs,
-		Mode:       netlink.NETKIT_MODE_L2,
-		Policy:     netlink.NETKIT_POLICY_FORWARD,
-		PeerPolicy: netlink.NETKIT_POLICY_FORWARD,
+	var device netlink.Link
+	switch devtype {
+	case NetkitL3:
+		netkit := &netlink.Netkit{
+			LinkAttrs:  attrs,
+			Mode:       netlink.NETKIT_MODE_L3,
+			Policy:     netlink.NETKIT_POLICY_FORWARD,
+			PeerPolicy: netlink.NETKIT_POLICY_FORWARD,
+		}
+		peerAttrs := netlink.NewLinkAttrs()
+		peerAttrs.Name = peerName
+		netkit.SetPeerAttrs(&peerAttrs)
+		device = netkit
+
+	case Veth:
+		device = &netlink.Veth{
+			LinkAttrs: attrs,
+			PeerName:  peerName,
+		}
+	default:
+		netkit := &netlink.Netkit{
+			LinkAttrs:  attrs,
+			Mode:       netlink.NETKIT_MODE_L2,
+			Policy:     netlink.NETKIT_POLICY_FORWARD,
+			PeerPolicy: netlink.NETKIT_POLICY_FORWARD,
+		}
+		peerAttrs := netlink.NewLinkAttrs()
+		peerAttrs.Name = peerName
+		netkit.SetPeerAttrs(&peerAttrs)
+		device = netkit
 	}
 
-	peerAttrs := netlink.NewLinkAttrs()
-	peerAttrs.Name = peerName
-	netkit.SetPeerAttrs(&peerAttrs)
-
 	if existing, lerr := netlink.LinkByName(hostName); lerr == nil {
-		slog.Warn("createNetkitPair: stale interface, deleting", "name", hostName)
+		slog.Warn("createPair: stale interface, deleting", "name", hostName)
 		if err := netlink.LinkDel(existing); err != nil {
 			return fmt.Errorf("error deleting stale interface %s: %w", hostName, err)
 		}
 	} else if existing, lerr := netlink.LinkByName(peerName); lerr == nil {
 		// peer returned to host namespace on disconnect; deleting it destroys both sides
-		slog.Warn("createNetkitPair: stale peer, deleting", "name", peerName)
+		slog.Warn("createPair: stale peer, deleting", "name", peerName)
 		if err := netlink.LinkDel(existing); err != nil {
 			return fmt.Errorf("error deleting stale peer interface %s: %w", peerName, err)
 		}
 	}
 
-	if err := netlink.LinkAdd(netkit); err != nil {
+	if err := netlink.LinkAdd(device); err != nil {
 		return fmt.Errorf("error creating netkit pair: %w", err)
 	}
 
 	peer, err := netlink.LinkByName(peerName)
 	if err != nil {
-		if err := netlink.LinkDel(netkit); err != nil {
-			slog.Warn("createNetkitPair: cleanup failed after peer lookup error", "name", hostName, "error", err)
+		if err := netlink.LinkDel(device); err != nil {
+			slog.Warn("createPair: cleanup failed after peer lookup error", "name", hostName, "error", err)
 		}
 		return fmt.Errorf("error finding peer %s: %w", peerName, err)
 	}
 
-	if err = netlink.LinkSetUp(netkit); err != nil {
-		if err := netlink.LinkDel(netkit); err != nil {
-			slog.Warn("createNetkitPair: cleanup failed after LinkSetUp error", "name", hostName, "error", err)
+	if err = netlink.LinkSetUp(device); err != nil {
+		if err := netlink.LinkDel(device); err != nil {
+			slog.Warn("createPair: cleanup failed after LinkSetUp error", "name", hostName, "error", err)
 		}
 		return fmt.Errorf("error bringing up %s: %w", hostName, err)
 	}
 	if err = netlink.LinkSetUp(peer); err != nil {
-		if err := netlink.LinkDel(netkit); err != nil {
-			slog.Warn("createNetkitPair: cleanup failed after peer LinkSetUp error", "name", hostName, "error", err)
+		if err := netlink.LinkDel(device); err != nil {
+			slog.Warn("createPair: cleanup failed after peer LinkSetUp error", "name", hostName, "error", err)
 		}
 		return fmt.Errorf("error bringing up %s: %w", peerName, err)
 	}
 
-	slog.Debug("createNetkitPair: done", "hostName", hostName, "peerName", peerName)
+	slog.Debug("createPair: done", "hostName", hostName, "peerName", peerName)
 	return nil
 }
 
