@@ -19,6 +19,7 @@ networks:
     ipam:
       config:
         - subnet: 10.10.0.0/24
+          gateway: 10.10.0.254
     driver: pair-ns-3
     driver_opts:
       if-prefix: nk
@@ -47,7 +48,7 @@ services:
       - ./ns3/run_sim.sh:/app/ns-3/run_sim.sh
     # Override this to run a simulation automatically on startup:
     # command: ["/app/ns-3/run_sim.sh", "my-simulation"]
-    command: ["/app/ns-3/run_sim.sh"]
+    command: ["/app/ns-3/run_sim.sh", "ping-connection"]
 
   client:
     build:
@@ -65,4 +66,4 @@ services:
     # or uncomment one of the lines below:
     # command: ["sh", "examples/ping_ns3.sh"]
     # command: ["python3", "my_app.py", "--flag", "value"]
-    command: ["/bin/sh"]
+    command: ["tail", "-f", "/dev/null"]

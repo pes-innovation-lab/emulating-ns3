@@ -40,4 +40,4 @@ if sudo docker plugin inspect pair-ns-3 >/dev/null 2>&1; then
     sudo docker plugin rm -f pair-ns-3
 fi
 sudo docker plugin create pair-ns-3 ./plugin-data
-sudo enable pair-ns-3
+sudo docker plugin enable pair-ns-3
