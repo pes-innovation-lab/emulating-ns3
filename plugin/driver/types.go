@@ -8,22 +8,23 @@ import (
 
 type NetlinkPairDriver struct {
 	sync.Mutex
-	Networks map[string]*NetkitNetwork
+	Networks map[string]*PairNetwork
 }
 
-type NetkitNetwork struct {
+type PairNetwork struct {
 	NetworkID       string
 	InterfacePrefix string
+	Type            DeviceType
 	IPAMv4          *nw_sdk.IPAMData
-	Pair            *NetkitPair
+	Pair            *DevicePair
 }
 
-type NetkitPair struct {
-	SideA *NetkitEndpoint
-	SideB *NetkitEndpoint
+type DevicePair struct {
+	SideA *PairEndpoint
+	SideB *PairEndpoint
 }
 
-type NetkitEndpoint struct {
+type PairEndpoint struct {
 	EndpointID    string
 	InterfaceName string
 
@@ -33,3 +34,11 @@ type NetkitEndpoint struct {
 	MACAddress string
 	Gateway    string
 }
+
+type DeviceType int
+
+const (
+	NetkitL2 = DeviceType(iota)
+	NetkitL3
+	Veth
+)

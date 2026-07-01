@@ -22,7 +22,7 @@ func main() {
 	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{Level: level})))
 
 	d := driver.NetlinkPairDriver{
-		Networks: make(map[string]*driver.NetkitNetwork),
+		Networks: make(map[string]*driver.PairNetwork),
 	}
 	handler := nw_sdk.NewHandler(&d)
 	slog.Info("netkit driver starting")
