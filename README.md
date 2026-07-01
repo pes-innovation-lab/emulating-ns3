@@ -10,7 +10,7 @@ Interfacing ns-3 simulations with real-world applications.
     sudo ./install_plugin.sh
 ```
 
-This builds and enables the `netkit-ns-3` driver that connects the
+This builds and enables the `pair-ns-3` driver that connects the
 ns-3 simulator to the client container.
 
 2. Start the ns-3 simulator and client:
@@ -42,7 +42,10 @@ To change the subnet or IPs, edit the
 
 > [!IMPORTANT]
 > Each client needs its own network.
-> To add another client, create an additional network block (also using the `netkit-ns-3` driver with a unique `if-prefix`) and attach it to the new service.
+> To add another client, create an additional network block (also using the `pair-ns-3` driver with a unique `if-prefix`) and attach it to the new service.
+
+> [!NOTE]
+> When assigning `10.10.0.1` to the `ns3` service, make sure the network IPAM config defines a custom gateway (such as `10.10.0.254`) instead of leaving it default. This prevents Docker from reserving `10.10.0.1` as the gateway IP, which would cause an "Address already in use" conflict.
 
 ## Running an ns-3 Simulation
 
@@ -73,6 +76,37 @@ With this, `docker compose up` will build and run the simulation immediately.
 The container exits when the simulation finishes.
 
 The simulation runs inside the ns-3 container and can reach the client container at its default IP (see [Network Setup](#network-setup)) via the simulated network.
+
+### Example: Ping Connectivity Simulation
+
+An example simulation `ping-connection` is provided to demonstrate real-time ICMP ping replies from an ns-3 node:
+
+1. **Start the containers** (pre-configured to run `ping-connection` on startup):
+   ```bash
+   docker compose up -d
+   ```
+
+2. **Run the connectivity test** from the client container:
+   ```bash
+   docker compose exec client sh examples/ping_ns3.sh
+   ```
+
+3. **Verify the traces** in the simulator logs:
+   ```bash
+   docker logs ns3-simulator
+   ```
+
+   You should see output indicating that the ns-3 simulator received the ARP/ICMP requests and replied successfully in real-time:
+   ```text
+   Simulation main started
+   Starting simulation run...
+   NS-3: Received ARP Request
+   NS-3: Sent ARP Response
+   NS-3: Received ICMP Echo Request
+   NS-3: Sent ARP Request
+   NS-3: Received ARP Response
+   NS-3: Sent ICMP Echo Reply
+   ```
 
 ## Adding client application
 
