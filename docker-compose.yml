@@ -46,6 +46,7 @@ services:
     volumes:
       - ./ns3/scratch:/app/ns-3/scratch/scripts
       - ./ns3/run_sim.sh:/app/ns-3/run_sim.sh
+
     # Override this to run a simulation automatically on startup:
     # command: ["/app/ns-3/run_sim.sh", "my-simulation"]
     command: ["/app/ns-3/run_sim.sh", "ping-connection"]
