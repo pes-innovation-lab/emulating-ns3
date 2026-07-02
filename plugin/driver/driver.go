@@ -71,12 +71,25 @@ func (n *NetlinkPairDriver) CreateNetwork(req *nw_sdk.CreateNetworkRequest) erro
 		NetworkID:       req.NetworkID,
 		InterfacePrefix: ifPrefix,
 		IPAMv4:          nil,
+		IPAMv6:          nil,
 		Pair:            nil,
 		Type:            Type,
 	}
 	if len(req.IPv4Data) > 0 {
 		n.Networks[req.NetworkID].IPAMv4 = req.IPv4Data[0]
 		slog.Info("CreateNetwork", "networkID", req.NetworkID, "ifPrefix", ifPrefix, "subnet", req.IPv4Data[0].Pool, "gateway", req.IPv4Data[0].Gateway)
+		if len(req.IPv4Data) > 1 {
+			slog.Warn("CreateNetwork: multiple IPv4 pools requested, only the first is used", "networkID", req.NetworkID, "ifPrefix", ifPrefix, "poolCount", len(req.IPv4Data))
+		}
+	} else {
+		slog.Info("CreateNetwork", "networkID", req.NetworkID, "ifPrefix", ifPrefix)
+	}
+	if len(req.IPv6Data) > 0 {
+		n.Networks[req.NetworkID].IPAMv6 = req.IPv6Data[0]
+		slog.Info("CreateNetwork", "networkID", req.NetworkID, "ifPrefix", ifPrefix, "subnet", req.IPv6Data[0].Pool, "gateway", req.IPv6Data[0].Gateway)
+		if len(req.IPv6Data) > 1 {
+			slog.Warn("CreateNetwork: multiple IPv6 pools requested, only the first is used", "networkID", req.NetworkID, "ifPrefix", ifPrefix, "poolCount", len(req.IPv6Data))
+		}
 	} else {
 		slog.Info("CreateNetwork", "networkID", req.NetworkID, "ifPrefix", ifPrefix)
 	}
@@ -99,7 +112,8 @@ func (n *NetlinkPairDriver) CreateEndpoint(req *nw_sdk.CreateEndpointRequest) (*
 	makeEndpoint := func() *PairEndpoint {
 		ep := &PairEndpoint{EndpointID: req.EndpointID}
 		if req.Interface != nil {
-			ep.IPAddress = req.Interface.Address
+			ep.IPv4Address = req.Interface.Address
+			ep.IPv6Address = req.Interface.AddressIPv6
 			ep.MACAddress = req.Interface.MacAddress
 		}
 		return ep
@@ -112,7 +126,7 @@ func (n *NetlinkPairDriver) CreateEndpoint(req *nw_sdk.CreateEndpointRequest) (*
 		} else {
 			network.Pair.SideA = ep
 		}
-		slog.Info("CreateEndpoint: SideA created", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "ip", ep.IPAddress, "mac", ep.MACAddress)
+		slog.Info("CreateEndpoint: SideA created", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "ipv4", ep.IPv4Address, "ipv6", ep.IPv6Address, "mac", ep.MACAddress)
 		return &nw_sdk.CreateEndpointResponse{}, nil
 
 	} else if network.Pair.SideB == nil {
@@ -122,7 +136,7 @@ func (n *NetlinkPairDriver) CreateEndpoint(req *nw_sdk.CreateEndpointRequest) (*
 			ep.InterfaceName = fmt.Sprintf("pr-%s%s-b", req.NetworkID[:min(len(req.NetworkID), 4)], network.Pair.SideA.EndpointID[:min(len(network.Pair.SideA.EndpointID), 4)])
 		}
 		network.Pair.SideB = ep
-		slog.Info("CreateEndpoint: SideB created", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "ip", ep.IPAddress, "mac", ep.MACAddress)
+		slog.Info("CreateEndpoint: SideB created", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "interface", ep.InterfaceName, "ipv4", ep.IPv4Address, "ipv6", ep.IPv6Address, "mac", ep.MACAddress)
 		return &nw_sdk.CreateEndpointResponse{}, nil
 
 	} else {
@@ -145,13 +159,22 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 		return nil, err
 	}
 
-	gateway := ""
+	gatewayv4 := ""
 	if network.IPAMv4 != nil {
 		ip, _, err := net.ParseCIDR(network.IPAMv4.Gateway)
 		if err != nil {
 			slog.Warn("Join: failed to parse gateway CIDR, using empty gateway", "ifPrefix", network.InterfacePrefix, "gateway", network.IPAMv4.Gateway, "error", err)
 		} else {
-			gateway = ip.String()
+			gatewayv4 = ip.String()
+		}
+	}
+	gatewayv6 := ""
+	if network.IPAMv6 != nil {
+		ip, _, err := net.ParseCIDR(network.IPAMv6.Gateway)
+		if err != nil {
+			slog.Warn("Join: failed to parse gateway CIDR, using empty gateway", "ifPrefix", network.InterfacePrefix, "gateway", network.IPAMv6.Gateway, "error", err)
+		} else {
+			gatewayv6 = ip.String()
 		}
 	}
 
@@ -168,7 +191,8 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 		return nil, err
 	}
 
-	ep.Gateway = gateway
+	ep.Gatewayv4 = gatewayv4
+	ep.Gatewayv6 = gatewayv6
 
 	dstPrefix := sanitiseInterfaceName(network.InterfacePrefix)
 
@@ -218,13 +242,14 @@ func (n *NetlinkPairDriver) Join(req *nw_sdk.JoinRequest) (*nw_sdk.JoinResponse,
 	}
 	ep.Joined = true
 
-	slog.Info("Join: endpoint ready", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "srcName", ep.InterfaceName, "dstPrefix", dstPrefix, "gateway", gateway)
+	slog.Info("Join: endpoint ready", "ifPrefix", network.InterfacePrefix, "endpointID", req.EndpointID, "srcName", ep.InterfaceName, "dstPrefix", dstPrefix, "gateway", gatewayv4)
 	return &nw_sdk.JoinResponse{
 		InterfaceName: nw_sdk.InterfaceName{
 			SrcName:   ep.InterfaceName,
 			DstPrefix: dstPrefix,
 		},
-		Gateway:               gateway,
+		Gateway:               gatewayv4,
+		GatewayIPv6:           gatewayv6,
 		StaticRoutes:          []*nw_sdk.StaticRoute{},
 		DisableGatewayService: false,
 	}, nil
@@ -361,9 +386,11 @@ func (n *NetlinkPairDriver) EndpointInfo(req *nw_sdk.InfoRequest) (*nw_sdk.InfoR
 			"ID":            ep.EndpointID,
 			"InterfaceName": ep.InterfaceName,
 			"Joined":        fmt.Sprintf("%v", ep.Joined),
-			"IPAddress":     ep.IPAddress,
+			"IPv4Address":   ep.IPv4Address,
+			"IPv6Address":   ep.IPv6Address,
 			"MACAddress":    ep.MACAddress,
-			"Gateway":       ep.Gateway,
+			"Gateway":       ep.Gatewayv4,
+			"GatewayIPv6":   ep.Gatewayv6,
 		},
 	}, nil
 }
