@@ -1,0 +1,69 @@
+# Copyright 2026 PES Innovation Lab
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+networks:
+  sim_net:
+    ipam:
+      config:
+        - subnet: 10.10.0.0/24
+          gateway: 10.10.0.254
+    driver: pair-ns-3:latest
+    driver_opts:
+      if-prefix: nk
+
+services:
+  ns3:
+    build:
+      context: ./ns3-node
+      dockerfile: Dockerfile
+      args:
+        - BUILD_PROF=debug
+        - GIT_URL="https://gitlab.com/nsnam/ns-3-dev.git"
+        - TAG=ns-3.48
+    container_name: ns3-simulator
+    networks:
+      sim_net:
+        ipv4_address: 10.10.0.1
+        mac_address: 00:00:00:00:00:01
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW # needed on some systems
+    environment:
+      - BUILD_PROF=debug
+    volumes:
+      - ./ns3-node/scratch:/app/ns-3/scratch/scripts
+      - ./ns3-node/run_sim.sh:/app/ns-3/run_sim.sh
+    # Override this to run a simulation automatically on startup:
+    # command: ["/app/ns-3/run_sim.sh", "my-simulation"]
+    command: ["/app/ns-3/run_sim.sh", "ping-connection"]
+
+  client:
+    build:
+      context: ./client-node
+      dockerfile: Dockerfile
+    container_name: client
+    networks:
+      sim_net:
+        ipv4_address: 10.10.0.2
+        mac_address: 00:00:00:00:00:02
+    working_dir: /app
+    volumes:
+      - ./client-node:/app
+    # Override the command (see the examples in README.md),
+    # or uncomment one of the lines below:
+    # command: ["sh", "examples/ping_ns3.sh"]
+    # command: ["python3", "my_app.py", "--flag", "value"]
+    command: ["tail", "-f", "/dev/null"]

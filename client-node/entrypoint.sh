@@ -1,3 +1,4 @@
+#!/bin/sh
 # Copyright 2026 PES Innovation Lab
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,14 +15,13 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-FROM golang:1.26 AS build
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-w -s" -o /pair-driver .
+set -e
 
-FROM alpine:3.24.1
-COPY --from=build /pair-driver /pair-driver
-RUN mkdir -p /run/docker/plugins
-ENTRYPOINT ["/pair-driver"]
+# Uncomment to disable transmit checksum offload
+# ethtool -K nk0 tx off >/dev/null 2>&1 || true
+
+if [ "$#" -eq 0 ]; then
+    exec /bin/sh
+fi
+
+exec "$@"
