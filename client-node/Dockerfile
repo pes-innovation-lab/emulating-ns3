@@ -31,6 +31,7 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
     python3-pip \
     python3-venv \
     tcpdump \
+    udhcpc \
     && rm -rf /var/lib/apt/lists/*
 
 # Optional support for Python projects that use uv.

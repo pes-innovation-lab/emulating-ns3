@@ -20,7 +20,7 @@ networks:
       config:
         - subnet: 10.10.0.0/24
           gateway: 10.10.0.254
-    driver: pair-ns-3
+    driver: netkit-ns-3:latest
     driver_opts:
       if-prefix: nk
 
@@ -31,7 +31,7 @@ services:
       dockerfile: Dockerfile
       args:
         - BUILD_PROF=debug
-        - GIT_URL="https://gitlab.com/nsnam/ns-3-dev.git"
+        - GIT_URL=https://gitlab.com/nsnam/ns-3-dev.git
         - TAG=ns-3.48
     container_name: ns3-simulator
     networks:
@@ -43,13 +43,14 @@ services:
       - NET_RAW # needed on some systems
     environment:
       - BUILD_PROF=debug
+      - NS_LOG=DhcpServer=level_all:DhcpHeader=level_all:EmuFdNetDeviceHelper=level_all
     volumes:
       - ./ns3/scratch:/app/ns-3/scratch/scripts
       - ./ns3/run_sim.sh:/app/ns-3/run_sim.sh
 
     # Override this to run a simulation automatically on startup:
     # command: ["/app/ns-3/run_sim.sh", "my-simulation"]
-    command: ["/app/ns-3/run_sim.sh", "ping-connection"]
+    command: ["/app/ns-3/run_sim.sh", "dhcp-connection"]
 
   client:
     build:
