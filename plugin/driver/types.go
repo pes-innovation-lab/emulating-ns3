@@ -16,6 +16,7 @@ type PairNetwork struct {
 	InterfacePrefix string
 	Type            DeviceType
 	IPAMv4          *nw_sdk.IPAMData
+	IPAMv6          *nw_sdk.IPAMData
 	Pair            *DevicePair
 }
 
@@ -30,9 +31,11 @@ type PairEndpoint struct {
 
 	Joined bool
 
-	IPAddress  string
-	MACAddress string
-	Gateway    string
+	IPv4Address string
+	IPv6Address string
+	MACAddress  string
+	Gatewayv4   string
+	Gatewayv6   string
 }
 
 type DeviceType int
