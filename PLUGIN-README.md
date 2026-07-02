@@ -37,7 +37,7 @@ services:
 
 networks:
   simnet:
-    driver: pair-ns-3
+    driver: pair-ns-3:latest
     driver_opts:
       if-prefix: simnet
       type: netkit-l2
@@ -69,15 +69,15 @@ services:
 
 networks:
   net-a:
-    driver: pair-ns-3
+    driver: pair-ns-3:latest
     driver_opts:
       if-prefix: neta
   net-b:
-    driver: pair-ns-3
+    driver: pair-ns-3:latest
     driver_opts:
       if-prefix: netb
   net-c:
-    driver: pair-ns-3
+    driver: pair-ns-3:latest
     driver_opts:
       if-prefix: netc
 ```
