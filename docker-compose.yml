@@ -50,7 +50,7 @@ services:
 
     # Override this to run a simulation automatically on startup:
     # command: ["/app/ns-3/run_sim.sh", "my-simulation"]
-    command: ["/app/ns-3/run_sim.sh", "dhcp-connection"]
+    command: ["/app/ns-3/run_sim.sh", "iperf-tcp-udp"]
 
   client:
     build:
@@ -61,6 +61,8 @@ services:
       sim_net:
         ipv4_address: 10.10.0.2
         mac_address: 00:00:00:00:00:02
+    cap_add:
+      - NET_ADMIN
     working_dir: /app
     volumes:
       - ./client-node:/app

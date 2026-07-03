@@ -17,8 +17,14 @@
 
 set -e
 
-# Uncomment to disable transmit checksum offload
-# ethtool -K nk0 tx off >/dev/null 2>&1 || true
+# Wait for the nk0 interface to appear, then disable transmit checksum offload
+for i in $(seq 1 10); do
+    if ip link show dev nk0 >/dev/null 2>&1; then
+        ethtool -K nk0 tx off >/dev/null 2>&1 || true
+        break
+    fi
+    sleep 0.2
+done
 
 if [ "$#" -eq 0 ]; then
     exec /bin/sh

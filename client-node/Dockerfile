@@ -32,6 +32,8 @@ RUN apt-get update && apt-get install --no-install-recommends -y \
     python3-venv \
     tcpdump \
     udhcpc \
+    iperf \
+    iperf3 \
     && rm -rf /var/lib/apt/lists/*
 
 # Optional support for Python projects that use uv.
