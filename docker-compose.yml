@@ -20,7 +20,7 @@ networks:
       config:
         - subnet: 10.10.0.0/24
           gateway: 10.10.0.254
-    driver: pair-ns-3
+    driver: pair-ns-3:latest
     driver_opts:
       if-prefix: nk
 
@@ -44,9 +44,9 @@ services:
     environment:
       - BUILD_PROF=debug
     volumes:
-      - ./ns3/scratch:/app/ns-3/scratch/scripts
-      - ./ns3/run_sim.sh:/app/ns-3/run_sim.sh
-
+      - ./ns3-node/scratch:/app/ns-3/scratch/scripts
+      - ./ns3-node/run_sim.sh:/app/ns-3/run_sim.sh
+      - ./ns3-node/narrow-noarp-interfaces.sh:/app/ns-3/narrow-noarp-interfaces.sh
     # Override this to run a simulation automatically on startup:
     # command: ["/app/ns-3/run_sim.sh", "my-simulation"]
     command: ["/app/ns-3/run_sim.sh", "ping-connection"]
