@@ -17,6 +17,8 @@
 
 set -e
 
+/app/ns-3/narrow-noarp-interfaces.sh
+
 . /app/pyenv/bin/activate
 
 SIM_NAME="$1"
