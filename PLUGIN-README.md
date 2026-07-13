@@ -10,16 +10,16 @@ Docker network plugin that creates a paired netkit/veth device between two conta
 
 ## Network options
 
-| Option | Default | Description |
-|--------|---------|-------------|
+| Option      | Default                        | Description                                      |
+| ----------- | ------------------------------ | ------------------------------------------------ |
 | `if-prefix` | first 16 chars of network UUID | Interface name inside containers: `{if-prefix}0` |
-| `type` | `netkit-l2` | See types below |
+| `type`      | `netkit-l2`                    | See types below                                  |
 
-| `type` | Behaviour |
-|--------|-----------|
-| `netkit-l2` | L2 netkit pair. Promiscuous mode set automatically. Use with `EmuFdNetDevice`. |
-| `veth` | Standard veth pair. |
-| `netkit-l3` | L3 netkit pair (no ARP, zero MAC). No known ns-3 integration path yet. |
+| `type`      | Behaviour                                                                                               |
+| ----------- | ------------------------------------------------------------------------------------------------------- |
+| `netkit-l2` | L2 netkit pair. Promiscuous mode set automatically. Use with `EmuFdNetDevice`.                          |
+| `veth`      | Standard veth pair. Promiscuous mode set automatically. Use with `EmuFdNetDevice`.                      |
+| `netkit-l3` | L3 netkit pair. Use with `EmuFdNetDevice` using `gitlab.com/Delta18-Git/ns-3-dev`:`Layer3-FdNetDevice`. |
 
 **Limit:** exactly 2 containers per network.
 
@@ -37,7 +37,7 @@ services:
 
 networks:
   simnet:
-    driver: pair-ns-3
+    driver: pair-ns-3:latest
     driver_opts:
       if-prefix: simnet
       type: netkit-l2
@@ -69,15 +69,15 @@ services:
 
 networks:
   net-a:
-    driver: pair-ns-3
+    driver: pair-ns-3:latest
     driver_opts:
       if-prefix: neta
   net-b:
-    driver: pair-ns-3
+    driver: pair-ns-3:latest
     driver_opts:
       if-prefix: netb
   net-c:
-    driver: pair-ns-3
+    driver: pair-ns-3:latest
     driver_opts:
       if-prefix: netc
 ```

@@ -1,3 +1,4 @@
+#!/bin/env bash
 # Copyright 2026 PES Innovation Lab
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,14 +15,19 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-FROM golang:1.26 AS build
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-w -s" -o /pair-driver .
+set -e
 
-FROM alpine:3.24.1
-COPY --from=build /pair-driver /pair-driver
-RUN mkdir -p /run/docker/plugins
-ENTRYPOINT ["/pair-driver"]
+/app/ns-3/narrow-noarp-interfaces.sh
+
+. /app/pyenv/bin/activate
+
+SIM_NAME="$1"
+
+if [ -n "$SIM_NAME" ]; then
+    # run a specific simulation and exit
+    /app/ns-3/ns3 configure --build-profile="${BUILD_PROF:-optimized}" --enable-examples --enable-tests
+    exec /app/ns-3/ns3 run "$SIM_NAME"
+else
+    # keep the container alive for exec-based usage
+    exec tail -f /dev/null
+fi
