@@ -15,28 +15,12 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-set -e
+# DHCP test: run perfdhcp against the ns-3 DHCP server (10.10.0.1).
 
-# Uncomment to disable transmit checksum offload
-# Wait for simulated interface nk0 to appear
-echo "Waiting for interface nk0 to appear..."
-for i in $(seq 1 15); do
-    if ip link show nk0 >/dev/null 2>&1; then
-        echo "Interface nk0 detected."
-        break
-    fi
-    sleep 0.5
-done
+NS3_SERVER_IP="10.10.0.1"
+INTERFACE="nk0"
 
-# Small stabilization delay
-sleep 1
+echo "Running perfdhcp client test on interface ${INTERFACE} against DHCP server at ${NS3_SERVER_IP}..."
 
-# Disable transmit checksum offload
-echo "Configuring tx checksum offload off on nk0..."
-ethtool -K nk0 tx off || echo "ethtool failed to configure nk0"
-
-if [ "$#" -eq 0 ]; then
-    exec /bin/sh
-fi
-
-exec "$@"
+# We run perfdhcp simulating 10 clients at a rate of 5 requests per second for a duration of 5 seconds.
+perfdhcp -4 -l "${INTERFACE}" -r 5 -R 10 -p 5 -t 1 -xi "${NS3_SERVER_IP}"

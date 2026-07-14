@@ -31,7 +31,7 @@ services:
       dockerfile: Dockerfile
       args:
         - BUILD_PROF=debug
-        - GIT_URL="https://gitlab.com/nsnam/ns-3-dev.git"
+        - GIT_URL=https://gitlab.com/nsnam/ns-3-dev.git
         - TAG=ns-3.48
     container_name: ns3-simulator
     networks:
@@ -43,13 +43,13 @@ services:
       - NET_RAW # needed on some systems
     environment:
       - BUILD_PROF=debug
+      - NS_LOG=DhcpServer=level_all:DhcpHeader=level_all:EmuFdNetDeviceHelper=level_all
     volumes:
       - ./ns3-node/scratch:/app/ns-3/scratch/scripts
       - ./ns3-node/run_sim.sh:/app/ns-3/run_sim.sh
-      - ./ns3-node/narrow-noarp-interfaces.sh:/app/ns-3/narrow-noarp-interfaces.sh
     # Override this to run a simulation automatically on startup:
     # command: ["/app/ns-3/run_sim.sh", "my-simulation"]
-    command: ["/app/ns-3/run_sim.sh", "ping-connection"]
+    command: ["/app/ns-3/run_sim.sh", "dhcp-connection"]
 
   client:
     build:
@@ -60,6 +60,9 @@ services:
       sim_net:
         ipv4_address: 10.10.0.2
         mac_address: 00:00:00:00:00:02
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
     working_dir: /app
     volumes:
       - ./client-node:/app
