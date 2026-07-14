@@ -108,6 +108,31 @@ An example simulation `ping-connection` is provided to demonstrate real-time ICM
    NS-3: Sent ICMP Echo Reply
    ```
 
+### Example: ARP Ping (arping) Connectivity Simulation
+
+In addition to standard ICMP pings, you can test ARP resolution using `arping` from the client node:
+
+1. **Start the containers** (pre-configured to run `ping-connection` on startup):
+   ```bash
+   docker compose up -d
+   ```
+
+2. **Run the arping test** from the client container:
+   ```bash
+   docker compose exec client sh examples/arping_ns3.sh
+   ```
+
+3. **Verify the traces** in the simulator logs:
+   ```bash
+   docker logs ns3-simulator
+   ```
+
+   You should see output in the simulator logs showing the simulator received the ARP requests and responded:
+   ```text
+   NS-3: Received ARP Request
+   NS-3: Sent ARP Response
+   ```
+
 ## Adding client application
 
 The `client` container mounts the entire `client-node/` directory at `/app`.

@@ -31,7 +31,7 @@ services:
       dockerfile: Dockerfile
       args:
         - BUILD_PROF=debug
-        - GIT_URL="https://gitlab.com/nsnam/ns-3-dev.git"
+        - GIT_URL=https://gitlab.com/nsnam/ns-3-dev.git
         - TAG=ns-3.48
     container_name: ns3-simulator
     networks:
@@ -66,5 +66,6 @@ services:
     # Override the command (see the examples in README.md),
     # or uncomment one of the lines below:
     # command: ["sh", "examples/ping_ns3.sh"]
+    # command: ["sh", "examples/arping_ns3.sh"]
     # command: ["python3", "my_app.py", "--flag", "value"]
     command: ["tail", "-f", "/dev/null"]
