@@ -211,8 +211,14 @@ def parse_ns3_output(stdout_text):
     result = {}
     for line in stdout_text.split("\n"):
         if "NS3_METRIC" in line:
+            # C++'s default double formatting (std::cout) switches to
+            # scientific notation for very small/large magnitudes (e.g.
+            # "9.09495e-13" for a near-zero jitter/variance floating-point
+            # residual) - without the exponent group, "9.09495e-13" parsed
+            # as 9.09495, a ~1e12x inflation of an effectively-zero value.
             match = re.search(
-                r"NS3_METRIC\s+(\w+):\s*(\d+(?:\.\d+)?)\s*([a-zA-Z%]+)?", line
+                r"NS3_METRIC\s+(\w+):\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*([a-zA-Z%]+)?",
+                line,
             )
             if match:
                 result[match.group(1)] = float(match.group(2))
@@ -261,4 +267,6 @@ if __name__ == "__main__":
     assert abs(fallback["jitter"] - 0.1) < 1e-9
     assert parse_ns3_output("NS3_METRIC throughput: 94.5 Mbps") == {"throughput": 94.5}
     assert parse_ns3_output("no metric here") == {}
+    assert parse_ns3_output("NS3_METRIC jitter: 9.09495e-13 ms") == {"jitter": 9.09495e-13}
+    assert parse_ns3_output("NS3_METRIC jitter: 4.54747e-14 ms") == {"jitter": 4.54747e-14}
     print("parsers.py self-check OK")
