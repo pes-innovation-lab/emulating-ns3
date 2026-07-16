@@ -11,7 +11,8 @@ def parse_iperf3(stdout_text):
     a metric absent from the output is left out of the dict entirely,
     never defaulted to 0.0 (0.0 can be a real measured value).
     Returns:
-        dict: subset of {'throughput': float, 'jitter': float, 'loss': float}
+        dict: subset of {'throughput': float, 'latency': float, 'jitter': float,
+                          'loss': float}
     """
     result = {}
 
@@ -30,6 +31,8 @@ def parse_iperf3(stdout_text):
                 streams = end.get("streams", [])
                 if streams and "sender" in streams[0]:
                     sender = streams[0]["sender"]
+                    if "rtt" in sender:
+                        result["latency"] = sender["rtt"] / 1000.0  # usec -> ms
                     if "rttvar" in sender:
                         result["jitter"] = sender["rttvar"] / 1000.0  # usec -> ms
             if "sum" in end and "bits_per_second" in end["sum"]:
@@ -116,7 +119,7 @@ def parse_arping(stdout_text):
     """
     Parses arping output.
     Returns:
-        dict: subset of {'latency': float, 'loss': float}
+        dict: subset of {'latency': float, 'jitter': float, 'loss': float}
     """
     result = {}
 
@@ -125,18 +128,23 @@ def parse_arping(stdout_text):
     # E.g. habets:  rtt min/avg/max/std-dev = 0.098/0.115/0.150/0.021 ms
     # E.g. habets:  rtt min/avg/max/std-dev = 98.000/115.000/150.000/21.000 usec
     match_summary = re.search(
-        r"rtt min/avg/max/(?:mdev|std-dev)\s*=\s*[\d\.]+/([\d\.]+)/[\d\.]+/[\d\.]+\s*([a-zA-Z\xb5\xc2]+)",
+        r"rtt min/avg/max/(?:mdev|std-dev)\s*=\s*"
+        r"[\d\.]+/([\d\.]+)/[\d\.]+/([\d\.]+)\s*([a-zA-Z\xb5\xc2]+)",
         stdout_text,
         re.IGNORECASE,
     )
     if match_summary:
-        val = float(match_summary.group(1))
-        unit = match_summary.group(2).lower()
+        avg, mdev = float(match_summary.group(1)), float(match_summary.group(2))
+        unit = match_summary.group(3).lower()
         if "usec" in unit or "μs" in unit or "\xb5s" in unit:
-            val /= 1000.0
-        result["latency"] = val
+            avg /= 1000.0
+            mdev /= 1000.0
+        result["latency"] = avg
+        # mdev/std-dev is arping's own measured RTT variation across its
+        # probes in this run - the direct jitter equivalent.
+        result["jitter"] = mdev
     else:
-        # Fallback: Parse individual lines and compute average
+        # Fallback: Parse individual lines and derive mean + stddev
         # E.g. Unicast reply from 10.10.0.1 [00:00:00:00:00:01]  0.812ms
         # E.g. 60 bytes from 00:00:00:00:00:01 (10.10.0.1): index=0 time=115.000 usec
         replies = re.findall(
@@ -155,7 +163,11 @@ def parse_arping(stdout_text):
                     val *= 1000.0
                 rtts.append(val)
             if rtts:
-                result["latency"] = sum(rtts) / len(rtts)
+                mean = sum(rtts) / len(rtts)
+                result["latency"] = mean
+                if len(rtts) > 1:
+                    variance = sum((r - mean) ** 2 for r in rtts) / len(rtts)
+                    result["jitter"] = variance**0.5
 
     # Extract loss
     # E.g. Sent 3 probes (1 broadcast(s)), Received 3 response(s)
@@ -214,13 +226,24 @@ if __name__ == "__main__":
         '{"end": {"sum_received": {"bits_per_second": 94500000.0}}}'
     ) == {"throughput": 94.5}
     assert parse_iperf3("garbage no numbers here") == {}
+    assert parse_iperf3(
+        '{"end": {"sum_received": {"bits_per_second": 94500000.0}, '
+        '"streams": [{"sender": {"rtt": 250, "rttvar": 45}}]}}'
+    ) == {"throughput": 94.5, "latency": 0.25, "jitter": 0.045}
     assert parse_perfdhcp("avg delay: 1.234 ms\nsent packets: 5, drops: 1") == {
         "latency": 1.234,
         "loss": 20.0,
     }
     assert parse_arping("rtt min/avg/max/mdev = 0.490/0.604/0.812/0.147 ms") == {
-        "latency": 0.604
+        "latency": 0.604,
+        "jitter": 0.147,
     }
+    fallback = parse_arping(
+        "Unicast reply from 10.10.0.1 [00:00:00:00:00:01]  0.500ms\n"
+        "Unicast reply from 10.10.0.1 [00:00:00:00:00:01]  0.700ms"
+    )
+    assert fallback["latency"] == 0.6
+    assert abs(fallback["jitter"] - 0.1) < 1e-9
     assert parse_ns3_output("NS3_METRIC throughput: 94.5 Mbps") == {"throughput": 94.5}
     assert parse_ns3_output("no metric here") == {}
     print("parsers.py self-check OK")

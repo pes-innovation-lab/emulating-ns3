@@ -91,19 +91,23 @@ int main (int argc, char *argv[])
   double duration = 5.0; // Client ran for 5.5 - 0.5 = 5 seconds
   double throughputMbps = (totalBytesReceived * 8.0) / (duration * 1e6);
 
+  double latencyMs = 0.0;
   double jitterMs = 0.0;
-  if (g_rttSamplesMs.size () > 1)
+  if (!g_rttSamplesMs.empty ())
     {
-      double mean = 0.0;
-      for (double d : g_rttSamplesMs) mean += d;
-      mean /= g_rttSamplesMs.size ();
-      double variance = 0.0;
-      for (double d : g_rttSamplesMs) variance += (d - mean) * (d - mean);
-      variance /= g_rttSamplesMs.size ();
-      jitterMs = std::sqrt (variance);
+      for (double d : g_rttSamplesMs) latencyMs += d;
+      latencyMs /= g_rttSamplesMs.size ();
+      if (g_rttSamplesMs.size () > 1)
+        {
+          double variance = 0.0;
+          for (double d : g_rttSamplesMs) variance += (d - latencyMs) * (d - latencyMs);
+          variance /= g_rttSamplesMs.size ();
+          jitterMs = std::sqrt (variance);
+        }
     }
 
   std::cout << "NS3_METRIC throughput: " << throughputMbps << " Mbps" << std::endl;
+  std::cout << "NS3_METRIC latency: " << latencyMs << " ms" << std::endl;
   std::cout << "NS3_METRIC jitter: " << jitterMs << " ms" << std::endl;
 
   Simulator::Destroy ();

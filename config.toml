@@ -33,6 +33,13 @@ scoring_table = [
 ]
 
 [[protocols.tcp.metrics]]
+name = "latency"
+unit = "ms"
+scoring_table = [
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+]
+
+[[protocols.tcp.metrics]]
 name = "jitter"
 unit = "ms"
 scoring_table = [
@@ -117,6 +124,13 @@ cleanup_cmds = ["pkill -9 arping"]
 
 [[protocols.arp.metrics]]
 name = "latency"
+unit = "ms"
+scoring_table = [
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+]
+
+[[protocols.arp.metrics]]
+name = "jitter"
 unit = "ms"
 scoring_table = [
     [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
