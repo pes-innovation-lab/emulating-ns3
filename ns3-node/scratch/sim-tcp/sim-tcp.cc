@@ -66,13 +66,13 @@ int main (int argc, char *argv[])
 
   PointToPointHelper pointToPoint;
   pointToPoint.SetDeviceAttribute ("DataRate", StringValue ("1Gbps"));
-  // Delay sampled once per run (seeded via RngRun) instead of a fixed
-  // 0.1ms - a fixed channel delay made every run's RTT samples cluster
-  // around the same value regardless of num_runs.
+  // Delay sampled once per run (seeded via RngRun) so std_sim isn't always
+  // 0. Applied via MicroSeconds, not MilliSeconds: MilliSeconds(double)
+  // truncates to whole ms, silently zeroing any sub-1ms value.
   Ptr<UniformRandomVariable> delayRv = CreateObject<UniformRandomVariable> ();
-  delayRv->SetAttribute ("Min", DoubleValue (0.05));
-  delayRv->SetAttribute ("Max", DoubleValue (0.15));
-  pointToPoint.SetChannelAttribute ("Delay", TimeValue (MilliSeconds (delayRv->GetValue ())));
+  delayRv->SetAttribute ("Min", DoubleValue (50.0));
+  delayRv->SetAttribute ("Max", DoubleValue (150.0));
+  pointToPoint.SetChannelAttribute ("Delay", TimeValue (MicroSeconds (delayRv->GetValue ())));
 
   NetDeviceContainer devices;
   devices = pointToPoint.Install (nodes);

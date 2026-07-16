@@ -1,7 +1,9 @@
 #include "ns3/applications-module.h"
 #include "ns3/arp-cache.h"
+#include "ns3/arp-header.h"
 #include "ns3/core-module.h"
 #include "ns3/csma-module.h"
+#include "ns3/ethernet-header.h"
 #include "ns3/internet-module.h"
 #include "ns3/ipv4-l3-protocol.h"
 #include "ns3/network-module.h"
@@ -22,15 +24,33 @@ NS_LOG_COMPONENT_DEFINE("SimArpEvaluation");
 // independent resolutions in a single run, not one.
 const uint32_t kProbeCount = 5;
 
-// ARP payload is 28 bytes; CsmaNetDevice pads/frames it to a 64-byte
-// minimum Ethernet frame
-const uint32_t kArpFrameSize = 64;
-
 double g_arpRequestTimeMs = -1.0;
 std::vector<double> g_rttSamplesMs;
 
+// Frame size alone can't distinguish request from reply (both pad to the
+// same 64-byte CSMA minimum) - check the actual ARP opcode.
+bool IsArpRequest(Ptr<const Packet> packet) {
+  Ptr<Packet> copy = packet->Copy();
+  EthernetHeader ethHeader;
+  if (!copy->RemoveHeader(ethHeader)) {
+    return false;
+  }
+  ArpHeader arpHeader;
+  return copy->PeekHeader(arpHeader) > 0 && arpHeader.IsRequest();
+}
+
+bool IsArpReply(Ptr<const Packet> packet) {
+  Ptr<Packet> copy = packet->Copy();
+  EthernetHeader ethHeader;
+  if (!copy->RemoveHeader(ethHeader)) {
+    return false;
+  }
+  ArpHeader arpHeader;
+  return copy->PeekHeader(arpHeader) > 0 && arpHeader.IsReply();
+}
+
 void SniffTx(Ptr<const Packet> packet) {
-  if (packet->GetSize() == kArpFrameSize) {
+  if (IsArpRequest(packet)) {
     // Sub-ms precision - GetMilliSeconds() truncates to int64 and would
     // read as 0 for the sub-millisecond RTTs arping actually reports.
     g_arpRequestTimeMs = Simulator::Now().GetSeconds() * 1000.0;
@@ -38,12 +58,10 @@ void SniffTx(Ptr<const Packet> packet) {
 }
 
 void SniffRx(Ptr<const Packet> packet) {
-  if (packet->GetSize() == kArpFrameSize) {
-    if (g_arpRequestTimeMs >= 0.0) {
-      double nowMs = Simulator::Now().GetSeconds() * 1000.0;
-      g_rttSamplesMs.push_back(nowMs - g_arpRequestTimeMs);
-      g_arpRequestTimeMs = -1.0;  // consumed - ignore until the next Tx
-    }
+  if (IsArpReply(packet) && g_arpRequestTimeMs >= 0.0) {
+    double nowMs = Simulator::Now().GetSeconds() * 1000.0;
+    g_rttSamplesMs.push_back(nowMs - g_arpRequestTimeMs);
+    g_arpRequestTimeMs = -1.0;  // consumed - ignore until the next Tx
   }
 }
 
@@ -65,13 +83,13 @@ int main(int argc, char *argv[]) {
 
   CsmaHelper csma;
   csma.SetChannelAttribute("DataRate", StringValue("1Gbps"));
-  // Delay sampled once per run (seeded via RngRun) instead of a fixed
-  // 0.1ms - a fixed channel delay made every run's latency bit-identical,
-  // so std_sim was always 0 regardless of num_runs.
+  // Delay sampled once per run (seeded via RngRun) so std_sim isn't always
+  // 0. Applied via MicroSeconds, not MilliSeconds: MilliSeconds(double)
+  // truncates to whole ms, silently zeroing any sub-1ms value.
   Ptr<UniformRandomVariable> delayRv = CreateObject<UniformRandomVariable>();
-  delayRv->SetAttribute("Min", DoubleValue(0.05));
-  delayRv->SetAttribute("Max", DoubleValue(0.15));
-  csma.SetChannelAttribute("Delay", TimeValue(MilliSeconds(delayRv->GetValue())));
+  delayRv->SetAttribute("Min", DoubleValue(50.0));
+  delayRv->SetAttribute("Max", DoubleValue(150.0));
+  csma.SetChannelAttribute("Delay", TimeValue(MicroSeconds(delayRv->GetValue())));
 
   NetDeviceContainer devices;
   devices = csma.Install(nodes);

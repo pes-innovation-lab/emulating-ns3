@@ -32,13 +32,13 @@ int main(int argc, char *argv[]) {
 
   CsmaHelper csma;
   csma.SetChannelAttribute("DataRate", StringValue("100Mbps"));
-  // Delay sampled once per run (seeded via RngRun) instead of a fixed
-  // 0.1ms - a fixed channel delay made every run's latency bit-identical,
-  // so std_sim was always 0 regardless of num_runs.
+  // Delay sampled once per run (seeded via RngRun) so std_sim isn't always
+  // 0. Applied via MicroSeconds, not MilliSeconds: MilliSeconds(double)
+  // truncates to whole ms, silently zeroing any sub-1ms value.
   Ptr<UniformRandomVariable> delayRv = CreateObject<UniformRandomVariable>();
-  delayRv->SetAttribute("Min", DoubleValue(0.05));
-  delayRv->SetAttribute("Max", DoubleValue(0.15));
-  csma.SetChannelAttribute("Delay", TimeValue(MilliSeconds(delayRv->GetValue())));
+  delayRv->SetAttribute("Min", DoubleValue(50.0));
+  delayRv->SetAttribute("Max", DoubleValue(150.0));
+  csma.SetChannelAttribute("Delay", TimeValue(MicroSeconds(delayRv->GetValue())));
 
   NetDeviceContainer devices;
   devices = csma.Install(nodes);
@@ -53,10 +53,10 @@ int main(int argc, char *argv[]) {
       address.Assign(devices.Get(0)); // server IP is 10.10.0.1
 
   DhcpHelper dhcpHelper;
-  // Default "Collect" (offer-collection wait before REQUEST) is 5s, which
-  // would push REQUEST past our short sim window; shrink it so a lease can
-  // complete well within the run.
-  dhcpHelper.SetClientAttribute("Collect", TimeValue(MilliSeconds(200)));
+  // Default "Collect" (offer-collection wait before REQUEST) is 5s. Single
+  // DHCP server here, nothing to wait to collect, so keep this minimal
+  // instead of letting it dominate measured latency.
+  dhcpHelper.SetClientAttribute("Collect", TimeValue(MicroSeconds(100)));
   // Server parameters:
   // - NetDevice on server
   // - Server IP address
