@@ -1,0 +1,9 @@
+[project]
+name = "ns3-eval-bench"
+version = "0.1.0"
+description = "Evaluation bench for ns-3 protocol conforming to real world"
+dependencies = [
+    "docker>=7.1.0",
+    "matplotlib>=3.9.0",
+    "numpy>=1.26.0",
+]

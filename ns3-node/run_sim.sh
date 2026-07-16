@@ -23,6 +23,13 @@ set -e
 
 SIM_NAME="$1"
 
+# Copy scratch scripts from mounted scripts directory to root of scratch to preserve CMakeLists.txt
+if [ -d "/app/ns-3/scratch/scripts" ]; then
+    cp -r /app/ns-3/scratch/scripts/* /app/ns-3/scratch/ 2>/dev/null || true
+    # Remove the scripts subdirectory reference inside the copied destination to avoid recursive copies
+    rm -rf /app/ns-3/scratch/scripts/scripts 2>/dev/null || true
+fi
+
 if [ -n "$SIM_NAME" ]; then
     # run a specific simulation and exit
     /app/ns-3/ns3 configure --build-profile="${BUILD_PROF:-optimized}" --enable-examples --enable-tests

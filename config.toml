@@ -1,0 +1,90 @@
+# Configuration for the Protocol Evaluation Bench
+
+[global]
+number_of_runs = 5
+timeout = 60
+output_dir = "./eval_results"
+
+[protocols.tcp]
+name = "TCP"
+client_image = "ubuntu:24.04"
+server_image = "ubuntu:24.04"
+client_packages = ["iperf3"]
+server_packages = ["iperf3"]
+client_cmd = "iperf3 -c 10.10.0.1 -t 5 -J"
+server_cmd = "iperf3 -s -1"
+ns3_script = "sim-tcp"
+metric_name = "throughput"
+metric_unit = "Mbps"
+scoring_table = [
+    [0.5, 10],
+    [1.0, 9],
+    [1.5, 8],
+    [2.0, 7],
+    [3.0, 5],
+    [5.0, 3],
+    [10.0, 1]
+]
+
+[protocols.udp]
+name = "UDP"
+client_image = "ubuntu:24.04"
+server_image = "ubuntu:24.04"
+client_packages = ["iperf3"]
+server_packages = ["iperf3"]
+client_cmd = "iperf3 -c 10.10.0.1 -u -b 10M -t 5 -J"
+server_cmd = "iperf3 -s -1"
+ns3_script = "sim-udp"
+metric_name = "throughput"
+metric_unit = "Mbps"
+scoring_table = [
+    [0.5, 10],
+    [1.0, 9],
+    [1.5, 8],
+    [2.0, 7],
+    [3.0, 5],
+    [5.0, 3],
+    [10.0, 1]
+]
+
+[protocols.dhcp]
+name = "DHCP"
+client_image = "ubuntu:24.04"
+server_image = "ubuntu:24.04"
+client_packages = ["isc-kea-perfdhcp", "iproute2"]
+server_packages = ["dnsmasq", "iproute2"]
+client_cmd = "perfdhcp -4 -R 10 -c 5 10.10.0.1"
+server_cmd = "dnsmasq -d -C /dev/null --port=0 --dhcp-range=10.10.0.10,10.10.0.100,12h --interface=nk0"
+ns3_script = "sim-dhcp"
+metric_name = "latency"
+metric_unit = "ms"
+scoring_table = [
+    [0.5, 10],
+    [1.0, 9],
+    [1.5, 8],
+    [2.0, 7],
+    [3.0, 5],
+    [5.0, 3],
+    [10.0, 1]
+]
+
+[protocols.arp]
+name = "ARP"
+client_image = "ubuntu:24.04"
+server_image = "ubuntu:24.04"
+client_packages = ["arping", "iproute2"]
+server_packages = ["iproute2"]
+client_cmd = "arping -c 5 -I nk0 10.10.0.1"
+server_cmd = "tail -f /dev/null"
+ns3_script = "sim-arp"
+metric_name = "latency"
+metric_unit = "ms"
+scoring_table = [
+    [0.5, 10],
+    [1.0, 9],
+    [1.5, 8],
+    [2.0, 7],
+    [3.0, 5],
+    [5.0, 3],
+    [10.0, 1]
+]

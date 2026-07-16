@@ -70,3 +70,9 @@ Testing/
 
 # built rootfs of plugin
 plugin-data/rootfs
+
+__pycache__
+__pycache__/*
+eval_results
+eval_results/*
+uv.lock
