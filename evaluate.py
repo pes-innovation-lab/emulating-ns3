@@ -401,10 +401,20 @@ def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run, global_cf
         mean_sim = float(np.mean(sim_vals))
         std_sim = float(np.std(sim_vals))
 
-        pooled_std = float(np.sqrt((std_real**2 + std_sim**2) / 2))
-        epsilon_floor = max(1e-9, 0.005 * abs(mean_real))
-        denom = max(pooled_std, epsilon_floor)
-        z_score = abs(mean_sim - mean_real) / denom
+        if abs(mean_real) < 1e-9 and std_real < 1e-9:
+            # Real-world baseline is a hard, deterministic zero (e.g. 0
+            # retransmits or 0% loss every run) - z-score is undefined here
+            # (dividing by guaranteed-zero variance), and the relative
+            # epsilon floor below degenerates too (0.5% of 0 is 0), which
+            # previously sent z_score into the billions for any nonzero
+            # sim value. Fall back to reading the scoring table directly
+            # in the metric's own unit instead of z-score multiples.
+            z_score = abs(mean_sim - mean_real)
+        else:
+            pooled_std = float(np.sqrt((std_real**2 + std_sim**2) / 2))
+            epsilon_floor = max(1e-9, 0.005 * abs(mean_real))
+            denom = max(pooled_std, epsilon_floor)
+            z_score = abs(mean_sim - mean_real) / denom
 
         score = calculate_score(z_score, metric_cfg["scoring_table"])
 
@@ -533,7 +543,11 @@ reported N/A rather than guessed.
   `epsilon_floor = max(1e-9, 0.005 * |mean_real|)` - the floor prevents a
   near-zero real-world std (containers on a localhost network are nearly
   deterministic) from turning a negligible mean difference into a runaway
-  z-score.
+  z-score. When the real-world side is a hard deterministic zero (std_real
+  and mean_real both ~0, e.g. 0 retransmits/0% loss every run), z-score
+  falls back to the raw absolute difference in the metric's own unit,
+  since dividing by a guaranteed-zero variance is undefined and the
+  relative floor above degenerates too (0.5% of 0 is 0).
 - **Overall score:** mean of per-metric scores
 """
     for name, m in available.items():

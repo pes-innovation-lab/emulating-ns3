@@ -10,12 +10,16 @@ NS_LOG_COMPONENT_DEFINE("SimDhcpEvaluation");
 
 double g_startTimeMs = 1000.0; // Client starts at 1.0s (1000ms)
 bool g_leaseObtained = false;
+double g_leaseTimeMs = -1.0;
 
 void LeaseObtainedCallback(const Ipv4Address &address) {
-  double nowMs = Simulator::Now().GetSeconds() * 1000.0;
-  double latencyMs = nowMs - g_startTimeMs;
-  std::cout << "NS3_METRIC latency: " << latencyMs << " ms" << std::endl;
-  std::cout << "NS3_METRIC loss: 0.0 %" << std::endl;
+  // NewLease can fire more than once within the run (renewal/rebind) -
+  // record only the first lease and defer printing until after Run() so
+  // a later renewal can't silently overwrite/duplicate the metric line.
+  if (g_leaseObtained) {
+    return;
+  }
+  g_leaseTimeMs = Simulator::Now().GetSeconds() * 1000.0;
   g_leaseObtained = true;
 }
 
@@ -80,7 +84,11 @@ int main(int argc, char *argv[]) {
   Simulator::Stop(stopTime);
   Simulator::Run();
 
-  if (!g_leaseObtained) {
+  if (g_leaseObtained) {
+    double latencyMs = g_leaseTimeMs - g_startTimeMs;
+    std::cout << "NS3_METRIC latency: " << latencyMs << " ms" << std::endl;
+    std::cout << "NS3_METRIC loss: 0.0 %" << std::endl;
+  } else {
     // If we never got a lease, log 100% loss
     std::cout << "NS3_METRIC latency: 0.0 ms" << std::endl;
     std::cout << "NS3_METRIC loss: 100.0 %" << std::endl;
