@@ -69,9 +69,12 @@ int main (int argc, char *argv[])
   // Delay sampled once per run (seeded via RngRun) so std_sim isn't always
   // 0. Applied via MicroSeconds, not MilliSeconds: MilliSeconds(double)
   // truncates to whole ms, silently zeroing any sub-1ms value.
+  // Range matches this testbed's real veth link (~4-6us one-way, from
+  // measured ARP RTT), not a generic "realistic wire" value - z-score
+  // only means something if sim and real are modeling the same link.
   Ptr<UniformRandomVariable> delayRv = CreateObject<UniformRandomVariable> ();
-  delayRv->SetAttribute ("Min", DoubleValue (50.0));
-  delayRv->SetAttribute ("Max", DoubleValue (150.0));
+  delayRv->SetAttribute ("Min", DoubleValue (2.0));
+  delayRv->SetAttribute ("Max", DoubleValue (8.0));
   pointToPoint.SetChannelAttribute ("Delay", TimeValue (MicroSeconds (delayRv->GetValue ())));
 
   NetDeviceContainer devices;
