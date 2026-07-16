@@ -3,6 +3,7 @@
 #include "ns3/internet-module.h"
 #include "ns3/point-to-point-module.h"
 #include "ns3/applications-module.h"
+#include "ns3/tcp-socket-base.h"
 
 #include <cmath>
 #include <vector>
@@ -12,6 +13,8 @@ using namespace ns3;
 NS_LOG_COMPONENT_DEFINE ("SimTcpEvaluation");
 
 static std::vector<double> g_rttSamplesMs;
+static std::vector<double> g_cwndSamplesKB;
+static uint32_t g_retransmitEvents = 0;
 
 void
 RttTracer (Time oldRtt, Time newRtt)
@@ -20,14 +23,35 @@ RttTracer (Time oldRtt, Time newRtt)
 }
 
 void
-ConnectRttTrace (uint32_t nodeId)
+CwndTracer (uint32_t oldCwnd, uint32_t newCwnd)
+{
+  g_cwndSamplesKB.push_back (newCwnd / 1024.0);
+}
+
+void
+CongStateTracer (TcpSocketState::TcpCongState_t oldState, TcpSocketState::TcpCongState_t newState)
+{
+  // ns-3 has no direct per-segment retransmit counter to match iperf3's
+  // TCP_INFO retransmits. Entering CA_LOSS/CA_RECOVERY is the socket
+  // detecting loss and retransmitting to recover from it, so counting
+  // those transitions is a retransmission-episode proxy, not a literal
+  // segment-level retransmit count.
+  if (newState == TcpSocketState::CA_LOSS || newState == TcpSocketState::CA_RECOVERY)
+    {
+      g_retransmitEvents++;
+    }
+}
+
+void
+ConnectTcpTraces (uint32_t nodeId)
 {
   // BulkSend's socket doesn't exist until StartApplication runs, so this
   // is scheduled to fire just after Start() instead of connecting before
   // Run() - the wildcard path only matches sockets that already exist.
-  Config::ConnectWithoutContext (
-      "/NodeList/" + std::to_string (nodeId) + "/$ns3::TcpL4Protocol/SocketList/*/RTT",
-      MakeCallback (&RttTracer));
+  std::string base = "/NodeList/" + std::to_string (nodeId) + "/$ns3::TcpL4Protocol/SocketList/*/";
+  Config::ConnectWithoutContext (base + "RTT", MakeCallback (&RttTracer));
+  Config::ConnectWithoutContext (base + "CongestionWindow", MakeCallback (&CwndTracer));
+  Config::ConnectWithoutContext (base + "CongState", MakeCallback (&CongStateTracer));
 }
 
 int main (int argc, char *argv[])
@@ -80,7 +104,7 @@ int main (int argc, char *argv[])
   sourceApp.Start (Seconds (0.5));
   sourceApp.Stop (Seconds (5.5));
 
-  Simulator::Schedule (Seconds (0.51), &ConnectRttTrace, nodes.Get (1)->GetId ());
+  Simulator::Schedule (Seconds (0.51), &ConnectTcpTraces, nodes.Get (1)->GetId ());
 
   Simulator::Stop (Seconds (6.0));
   Simulator::Run ();
@@ -106,9 +130,18 @@ int main (int argc, char *argv[])
         }
     }
 
+  double cwndMeanKB = 0.0;
+  if (!g_cwndSamplesKB.empty ())
+    {
+      for (double d : g_cwndSamplesKB) cwndMeanKB += d;
+      cwndMeanKB /= g_cwndSamplesKB.size ();
+    }
+
   std::cout << "NS3_METRIC throughput: " << throughputMbps << " Mbps" << std::endl;
   std::cout << "NS3_METRIC latency: " << latencyMs << " ms" << std::endl;
   std::cout << "NS3_METRIC jitter: " << jitterMs << " ms" << std::endl;
+  std::cout << "NS3_METRIC retransmits: " << g_retransmitEvents << " count" << std::endl;
+  std::cout << "NS3_METRIC snd_cwnd: " << cwndMeanKB << " KB" << std::endl;
 
   Simulator::Destroy ();
   return 0;

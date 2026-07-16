@@ -60,6 +60,9 @@ RUN mkdir -p /app && cd /app && \
     git clone ${GIT_URL} ns-3 && \
     cd ns-3 && git checkout ${TAG}
 
+# ccperf (https://www.ccperf.net) a congestion-control benchmarking framework
+# RUN git clone https://gitlab.com/ccperf/ccperf-ns3.git /app/ns-3/src/ccperf
+
 RUN python3 -m venv /app/pyenv
 
 RUN cd /app/ns-3 && . /app/pyenv/bin/activate && \

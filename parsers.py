@@ -12,7 +12,7 @@ def parse_iperf3(stdout_text):
     never defaulted to 0.0 (0.0 can be a real measured value).
     Returns:
         dict: subset of {'throughput': float, 'latency': float, 'jitter': float,
-                          'loss': float}
+                          'loss': float, 'retransmits': float, 'snd_cwnd': float}
     """
     result = {}
 
@@ -35,6 +35,10 @@ def parse_iperf3(stdout_text):
                         result["latency"] = sender["rtt"] / 1000.0  # usec -> ms
                     if "rttvar" in sender:
                         result["jitter"] = sender["rttvar"] / 1000.0  # usec -> ms
+                    if "retransmits" in sender:
+                        result["retransmits"] = float(sender["retransmits"])
+                    if "snd_cwnd" in sender:
+                        result["snd_cwnd"] = sender["snd_cwnd"] / 1024.0  # bytes -> KB
             if "sum" in end and "bits_per_second" in end["sum"]:
                 result["throughput"] = end["sum"].get("bits_per_second", 0.0) / 1e6
                 if "jitter_ms" in end["sum"]:
@@ -228,8 +232,15 @@ if __name__ == "__main__":
     assert parse_iperf3("garbage no numbers here") == {}
     assert parse_iperf3(
         '{"end": {"sum_received": {"bits_per_second": 94500000.0}, '
-        '"streams": [{"sender": {"rtt": 250, "rttvar": 45}}]}}'
-    ) == {"throughput": 94.5, "latency": 0.25, "jitter": 0.045}
+        '"streams": [{"sender": {"rtt": 250, "rttvar": 45, "retransmits": 3, '
+        '"snd_cwnd": 131072}}]}}'
+    ) == {
+        "throughput": 94.5,
+        "latency": 0.25,
+        "jitter": 0.045,
+        "retransmits": 3.0,
+        "snd_cwnd": 128.0,
+    }
     assert parse_perfdhcp("avg delay: 1.234 ms\nsent packets: 5, drops: 1") == {
         "latency": 1.234,
         "loss": 20.0,
