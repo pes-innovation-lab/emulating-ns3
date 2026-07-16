@@ -1,4 +1,11 @@
 # Configuration for the Protocol Evaluation Bench
+#
+# Adding a protocol requires:
+# - point `parser` at a function in parsers.PARSERS
+# - list `cleanup_cmds` to kill leftover processes between runs
+# - declare a `metrics` table per metric to score.
+# A metric is only scored if it's declared here and present in
+# both the real-world and ns-3 output for every run
 
 [global]
 number_of_runs = 5
@@ -14,16 +21,14 @@ server_packages = ["iperf3"]
 client_cmd = "iperf3 -c 10.10.0.1 -t 5 -J"
 server_cmd = "iperf3 -s -1"
 ns3_script = "sim-tcp"
-metric_name = "throughput"
-metric_unit = "Mbps"
+parser = "iperf3"
+cleanup_cmds = ["pkill -9 iperf3"]
+
+[[protocols.tcp.metrics]]
+name = "throughput"
+unit = "Mbps"
 scoring_table = [
-    [0.5, 10],
-    [1.0, 9],
-    [1.5, 8],
-    [2.0, 7],
-    [3.0, 5],
-    [5.0, 3],
-    [10.0, 1]
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]
 
 [protocols.udp]
@@ -35,16 +40,28 @@ server_packages = ["iperf3"]
 client_cmd = "iperf3 -c 10.10.0.1 -u -b 10M -t 5 -J"
 server_cmd = "iperf3 -s -1"
 ns3_script = "sim-udp"
-metric_name = "throughput"
-metric_unit = "Mbps"
+parser = "iperf3"
+cleanup_cmds = ["pkill -9 iperf3"]
+
+[[protocols.udp.metrics]]
+name = "throughput"
+unit = "Mbps"
 scoring_table = [
-    [0.5, 10],
-    [1.0, 9],
-    [1.5, 8],
-    [2.0, 7],
-    [3.0, 5],
-    [5.0, 3],
-    [10.0, 1]
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+]
+
+[[protocols.udp.metrics]]
+name = "jitter"
+unit = "ms"
+scoring_table = [
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+]
+
+[[protocols.udp.metrics]]
+name = "loss"
+unit = "%"
+scoring_table = [
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]
 
 [protocols.dhcp]
@@ -52,20 +69,30 @@ name = "DHCP"
 client_image = "ubuntu:24.04"
 server_image = "ubuntu:24.04"
 client_packages = ["isc-kea-perfdhcp", "iproute2"]
+
+client_pre_install_cmds = [
+    "apt-get update -qq && apt-get install -y -qq curl ca-certificates",
+    "curl -1sLf 'https://dl.cloudsmith.io/public/isc/kea-3-2/setup.deb.sh' | bash",
+]
 server_packages = ["dnsmasq", "iproute2"]
-client_cmd = "perfdhcp -4 -R 10 -c 5 10.10.0.1"
-server_cmd = "dnsmasq -d -C /dev/null --port=0 --dhcp-range=10.10.0.10,10.10.0.100,12h --interface=nk0"
+client_cmd = "perfdhcp -4 -r 5 -p 2 -R 5 -l nk0 -W 300000"
+server_cmd = "dnsmasq -d -C /dev/null --port=0 --dhcp-range=10.10.0.10,10.10.0.100,12h --interface=nk0 --no-ping"
 ns3_script = "sim-dhcp"
-metric_name = "latency"
-metric_unit = "ms"
+parser = "perfdhcp"
+cleanup_cmds = ["pkill -9 dnsmasq", "pkill -9 perfdhcp"]
+
+[[protocols.dhcp.metrics]]
+name = "latency"
+unit = "ms"
 scoring_table = [
-    [0.5, 10],
-    [1.0, 9],
-    [1.5, 8],
-    [2.0, 7],
-    [3.0, 5],
-    [5.0, 3],
-    [10.0, 1]
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+]
+
+[[protocols.dhcp.metrics]]
+name = "loss"
+unit = "%"
+scoring_table = [
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]
 
 [protocols.arp]
@@ -77,14 +104,19 @@ server_packages = ["iproute2"]
 client_cmd = "arping -c 5 -I nk0 10.10.0.1"
 server_cmd = "tail -f /dev/null"
 ns3_script = "sim-arp"
-metric_name = "latency"
-metric_unit = "ms"
+parser = "arping"
+cleanup_cmds = ["pkill -9 arping"]
+
+[[protocols.arp.metrics]]
+name = "latency"
+unit = "ms"
 scoring_table = [
-    [0.5, 10],
-    [1.0, 9],
-    [1.5, 8],
-    [2.0, 7],
-    [3.0, 5],
-    [5.0, 3],
-    [10.0, 1]
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+]
+
+[[protocols.arp.metrics]]
+name = "loss"
+unit = "%"
+scoring_table = [
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]

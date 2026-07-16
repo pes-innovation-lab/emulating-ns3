@@ -3,21 +3,56 @@
 Orchestration script for the Protocol Evaluation Bench.
 Spins up real-world containers, runs ns-3 simulations, parses metrics,
 calculates standard deviation and z-score differences, and outputs a scoring report.
+
+Protocol behaviour (packages, commands, cleanup, parser, scored metrics) all
+comes from config.toml - adding a protocol needs no changes here.
 """
+
+import argparse
+import datetime
 import os
 import sys
 import time
-import datetime
-import argparse
-import numpy as np
+
 import matplotlib
-matplotlib.use('Agg')  # Non-interactive backend
-import matplotlib.pyplot as plt
+import numpy as np
+
+matplotlib.use("Agg")  # Non-interactive backend
 import json
 import tomllib
-import docker
+from concurrent.futures import ThreadPoolExecutor
 
-from parsers import parse_iperf3, parse_perfdhcp, parse_arping, parse_ns3_output
+import docker
+import matplotlib.pyplot as plt
+
+from parsers import PARSERS, parse_ns3_output
+
+
+def run_pre_install_cmds(container, cmds, label):
+    """
+    Runs arbitrary shell commands inside a container before package
+    installation.
+    """
+    for cmd in cmds:
+        print(f"Running pre-install command inside {label} container: {cmd}")
+        code, out = container.exec_run(["bash", "-c", cmd], user="root")
+        if code != 0:
+            print(f"Pre-install command failed ({label}): {out.decode()}")
+
+
+def provision_container(container, p_config, side):
+    """Adds any vendor repos and installs packages inside one container (server or client)."""
+    label = side
+    run_pre_install_cmds(container, p_config.get(f"{side}_pre_install_cmds", []), label)
+    print(f"Dynamically installing packages inside {label} container...")
+    container.exec_run("apt-get update", user="root")
+    packages = p_config.get(f"{side}_packages", [])
+    if packages:
+        install_cmd = "apt-get install -y " + " ".join(packages)
+        code, out = container.exec_run(install_cmd, user="root")
+        if code != 0:
+            print(f"{label.capitalize()} packages installation failed: {out.decode()}")
+
 
 def ensure_image(client, image_name):
     """Checks if the image exists locally, and pulls it if not."""
@@ -27,25 +62,21 @@ def ensure_image(client, image_name):
         print(f"Image '{image_name}' not found locally. Pulling...")
         client.images.pull(image_name)
 
-def clean_leftover_processes(container, protocol):
+
+def clean_leftover_processes(container, p_config):
     """Kills any leftover processes from previous runs inside the container."""
-    if protocol in ['tcp', 'udp']:
-        container.exec_run("pkill -9 iperf3", user="root")
-    elif protocol == 'dhcp':
-        container.exec_run("pkill -9 dnsmasq", user="root")
-        container.exec_run("pkill -9 perfdhcp", user="root")
-    elif protocol == 'arp':
-        container.exec_run("pkill -9 arping", user="root")
+    for cmd in p_config.get("cleanup_cmds", []):
+        container.exec_run(cmd, user="root")
+
 
 def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
     """Runs the real-world baseline containers using pair-ns-3 driver."""
     print("\n--- Part 1: Running Real-World baseline ---")
-    p_config = config['protocols'][protocol]
-    
-    # Define network options
+    p_config = config["protocols"][protocol]
+    parser_fn = PARSERS[p_config["parser"]]
+
     net_name = f"eval_net_{protocol}"
-    
-    # 1. Setup Docker network with pair-ns-3 driver
+
     print(f"Creating Docker network '{net_name}' with pair-ns-3 driver...")
     try:
         network = client.networks.get(net_name)
@@ -53,30 +84,25 @@ def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
         time.sleep(1)
     except docker.errors.NotFound:
         pass
-        
+
     network = client.networks.create(
         name=net_name,
         driver="pair-ns-3:latest",
         options={"if-prefix": "nk", "type": "netkit-l2"},
         ipam=docker.types.IPAMConfig(
             pool_configs=[
-                docker.types.IPAMPool(
-                    subnet="10.10.0.0/24",
-                    gateway="10.10.0.254"
-                )
+                docker.types.IPAMPool(subnet="10.10.0.0/24", gateway="10.10.0.254")
             ]
-        )
+        ),
     )
-    
+
     server_container = None
     client_container = None
-    
+
     try:
-        # Pull images if not present
-        ensure_image(client, p_config['server_image'])
-        ensure_image(client, p_config['client_image'])
-        
-        # 2. Start server container (10.10.0.1)
+        ensure_image(client, p_config["server_image"])
+        ensure_image(client, p_config["client_image"])
+
         server_name = f"eval_server_{protocol}"
         print(f"Starting server container '{server_name}'...")
         try:
@@ -84,17 +110,16 @@ def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
             c.remove(force=True)
         except docker.errors.NotFound:
             pass
-            
+
         server_container = client.containers.create(
-            image=p_config['server_image'],
+            image=p_config["server_image"],
             command=["tail", "-f", "/dev/null"],
             name=server_name,
             detach=True,
-            cap_add=["NET_ADMIN", "NET_RAW"]
+            cap_add=["NET_ADMIN", "NET_RAW"],
         )
         server_container.start()
-        
-        # 3. Start client container (10.10.0.2)
+
         client_name = f"eval_client_{protocol}"
         print(f"Starting client container '{client_name}'...")
         try:
@@ -102,83 +127,70 @@ def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
             c.remove(force=True)
         except docker.errors.NotFound:
             pass
-            
+
         client_container = client.containers.create(
-            image=p_config['client_image'],
+            image=p_config["client_image"],
             command=["tail", "-f", "/dev/null"],
             name=client_name,
             detach=True,
-            cap_add=["NET_ADMIN", "NET_RAW"]
+            cap_add=["NET_ADMIN", "NET_RAW"],
         )
         client_container.start()
-        
-        # 4. Install packages dynamically (while connected to default bridge with internet)
-        print("Dynamically installing packages inside server container...")
-        server_container.exec_run("apt-get update", user="root")
-        if p_config['server_packages']:
-            install_cmd = "apt-get install -y " + " ".join(p_config['server_packages'])
-            code, out = server_container.exec_run(install_cmd, user="root")
-            if code != 0:
-                print(f"Server packages installation failed: {out.decode()}")
-                
-        print("Dynamically installing packages inside client container...")
-        client_container.exec_run("apt-get update", user="root")
-        if p_config['client_packages']:
-            install_cmd = "apt-get install -y " + " ".join(p_config['client_packages'])
-            code, out = client_container.exec_run(install_cmd, user="root")
-            if code != 0:
-                print(f"Client packages installation failed: {out.decode()}")
 
-        # 5. Connect both containers to the private evaluation network
+        # Server/client provisioning is independent - run concurrently instead
+        # of paying apt-get's update+install latency twice, back to back.
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            list(
+                pool.map(
+                    lambda args: provision_container(*args),
+                    [
+                        (server_container, p_config, "server"),
+                        (client_container, p_config, "client"),
+                    ],
+                )
+            )
+
         print("Connecting containers to evaluation network...")
         network.connect(server_container, ipv4_address="10.10.0.1")
         network.connect(client_container, ipv4_address="10.10.0.2")
-        
-        metrics = []
+
+        metrics_per_run = []  # list of dicts, one per run
         raw_outputs = []
-        
-        # 5. Run iterations
+
         for run in range(1, num_runs + 1):
             print(f"Run {run}/{num_runs}...")
-            clean_leftover_processes(server_container, protocol)
-            clean_leftover_processes(client_container, protocol)
+            clean_leftover_processes(server_container, p_config)
+            clean_leftover_processes(client_container, p_config)
             time.sleep(1)
-            
-            # Start server command in background
-            server_cmd = p_config['server_cmd']
+
+            server_cmd = p_config["server_cmd"]
             print(f"  Starting server: {server_cmd}")
-            server_container.exec_run(server_cmd, detach=True, user="root")
+            try:
+                server_container.exec_run(server_cmd, detach=True, user="root")
+            except docker.errors.APIError as e:
+                print(f"  Server command failed to start: {e}")
             time.sleep(2)  # Wait for server to bind
-            
-            # Run client command synchronously
-            client_cmd = p_config['client_cmd']
+
+            client_cmd = p_config["client_cmd"]
             print(f"  Running client: {client_cmd}")
             start_time = time.time()
-            code, out = client_container.exec_run(client_cmd, user="root")
+            try:
+                code, out = client_container.exec_run(client_cmd, user="root")
+                stdout_text = out.decode("utf-8", errors="ignore")
+            except docker.errors.APIError as e:
+                print(f"  Client command failed to run: {e}")
+                code, stdout_text = -1, ""
             duration = time.time() - start_time
-            
-            stdout_text = out.decode("utf-8", errors="ignore")
+
             raw_outputs.append(stdout_text)
-            
-            # Parse result
-            val = 0.0
-            if protocol in ['tcp', 'udp']:
-                res = parse_iperf3(stdout_text)
-                val = res[p_config['metric_name']]
-            elif protocol == 'dhcp':
-                res = parse_perfdhcp(stdout_text)
-                val = res[p_config['metric_name']]
-            elif protocol == 'arp':
-                res = parse_arping(stdout_text)
-                val = res[p_config['metric_name']]
-                
-            print(f"  Result metric ({p_config['metric_name']}): {val} {p_config['metric_unit']} (Code: {code}, Duration: {duration:.2f}s)")
-            metrics.append(val)
-            
-        return metrics, raw_outputs
-        
+
+            res = parser_fn(stdout_text)
+            print(f"  Parsed metrics: {res} (Code: {code}, Duration: {duration:.2f}s)")
+            metrics_per_run.append(res)
+
+        return metrics_per_run, raw_outputs
+
     finally:
-        # Cleanup Part 1
         print("Cleaning up real-world containers and network...")
         if client_container:
             try:
@@ -196,32 +208,32 @@ def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
             except Exception:
                 pass
 
+
 def run_ns3_simulation(client, protocol, config, num_runs, timeout, output_dir):
     """Runs the ns-3 simulation baseline."""
     print("\n--- Part 2: Running ns-3 Simulation baseline ---")
-    p_config = config['protocols'][protocol]
-    ns3_script = p_config['ns3_script']
-    
-    # Ensure image exists or build it
+    p_config = config["protocols"][protocol]
+    ns3_script = p_config["ns3_script"]
+
     image_tag = "ns3-eval-sim:latest"
+
+    build_prof = config["global"].get("ns3_build_profile", "optimized")
+
     try:
         client.images.get(image_tag)
     except docker.errors.ImageNotFound:
         print(f"Image {image_tag} not found. Building it from ns3-node/Dockerfile...")
         client.images.build(
-            path="./ns3-node",
-            tag=image_tag,
-            buildargs={"BUILD_PROF": "debug"}
+            path="./ns3-node", tag=image_tag, buildargs={"BUILD_PROF": build_prof}
         )
-        
-    metrics = []
+
+    metrics_per_run = []
     raw_outputs = []
-    
-    # Absolute paths for bind mounts
+
     scratch_dir = os.path.abspath("./ns3-node/scratch")
     run_sim_script = os.path.abspath("./ns3-node/run_sim.sh")
     narrow_script = os.path.abspath("./ns3-node/narrow-noarp-interfaces.sh")
-    
+
     sim_container = None
     try:
         print("Starting persistent ns-3 simulation container...")
@@ -231,35 +243,39 @@ def run_ns3_simulation(client, protocol, config, num_runs, timeout, output_dir):
             volumes={
                 scratch_dir: {"bind": "/app/ns-3/scratch/scripts", "mode": "rw"},
                 run_sim_script: {"bind": "/app/ns-3/run_sim.sh", "mode": "ro"},
-                narrow_script: {"bind": "/app/ns-3/narrow-noarp-interfaces.sh", "mode": "ro"}
+                narrow_script: {
+                    "bind": "/app/ns-3/narrow-noarp-interfaces.sh",
+                    "mode": "ro",
+                },
             },
-            environment={"BUILD_PROF": "debug"},
+            environment={"BUILD_PROF": build_prof},
             cap_add=["NET_ADMIN", "NET_RAW"],
-            detach=True
+            detach=True,
         )
-        
-        # Give container a second to start
+
         time.sleep(1)
-        
+
         for run in range(1, num_runs + 1):
             print(f"Run {run}/{num_runs}...")
-            
+
             start_time = time.time()
-            code, out = sim_container.exec_run(
-                ["/app/ns-3/run_sim.sh", ns3_script],
-                user="root"
-            )
+            try:
+                code, out = sim_container.exec_run(
+                    ["/app/ns-3/run_sim.sh", ns3_script], user="root"
+                )
+                stdout_text = out.decode("utf-8", errors="ignore")
+            except docker.errors.APIError as e:
+                print(f"  ns-3 run failed: {e}")
+                code, stdout_text = -1, ""
             duration = time.time() - start_time
-            
-            stdout_text = out.decode("utf-8", errors="ignore")
             raw_outputs.append(stdout_text)
-            
-            # Parse result
+
             res = parse_ns3_output(stdout_text)
-            val = res[p_config['metric_name']]
-            print(f"  Result metric ({p_config['metric_name']}): {val} {p_config['metric_unit']} (Exit Code: {code}, Duration: {duration:.2f}s)")
-            metrics.append(val)
-            
+            print(
+                f"  Parsed metrics: {res} (Exit Code: {code}, Duration: {duration:.2f}s)"
+            )
+            metrics_per_run.append(res)
+
     finally:
         if sim_container:
             print("Cleaning up ns-3 simulation container...")
@@ -267,120 +283,189 @@ def run_ns3_simulation(client, protocol, config, num_runs, timeout, output_dir):
                 sim_container.remove(force=True)
             except Exception:
                 pass
-                
-    return metrics, raw_outputs
+
+    return metrics_per_run, raw_outputs
+
 
 def calculate_score(z_score, scoring_table):
     """Calculates score out of 10 based on z-score and scoring table."""
-    # Sort scoring table by z-score threshold ascending
     sorted_table = sorted(scoring_table, key=lambda x: x[0])
     for threshold, score in sorted_table:
         if z_score <= threshold:
             return score
     return 0
 
-def generate_report(protocol, p_config, real_metrics, sim_metrics, z_score, score, output_dir):
-    """Generates Markdown, JSON reports and plots the comparison graph."""
+
+def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run):
+    """
+    Scores every metric declared in the protocol config that is present in
+    every recorded run on both sides. Metrics missing on either side (e.g. a
+    sim script that doesn't emit jitter) are reported as N/A, never
+    defaulted to 0 - a missing measurement is not the same as a zero one.
+
+    Returns:
+        dict: {metric_name: {"available": bool, "real": [...], "sim": [...],
+                              "mean_real", "std_real", "mean_sim", "std_sim",
+                              "z_score", "score", "unit"}}
+        float or None: overall score (mean of available per-metric scores)
+    """
+    results = {}
+    for metric_cfg in p_config.get("metrics", []):
+        name = metric_cfg["name"]
+        real_vals = [r[name] for r in real_metrics_per_run if name in r]
+        sim_vals = [s[name] for s in sim_metrics_per_run if name in s]
+
+        available = (
+            len(real_vals) == len(real_metrics_per_run)
+            and len(real_vals) > 0
+            and len(sim_vals) == len(sim_metrics_per_run)
+            and len(sim_vals) > 0
+        )
+
+        if not available:
+            results[name] = {"available": False, "unit": metric_cfg.get("unit", "")}
+            continue
+
+        mean_real = float(np.mean(real_vals))
+        std_real = float(np.std(real_vals))
+        mean_sim = float(np.mean(sim_vals))
+        std_sim = float(np.std(sim_vals))
+
+        if std_real == 0.0:
+            z_score = 0.0 if mean_real == mean_sim else abs(mean_sim - mean_real) / 1e-6
+        else:
+            z_score = abs(mean_sim - mean_real) / std_real
+
+        score = calculate_score(z_score, metric_cfg["scoring_table"])
+
+        results[name] = {
+            "available": True,
+            "unit": metric_cfg.get("unit", ""),
+            "real": real_vals,
+            "sim": sim_vals,
+            "mean_real": mean_real,
+            "std_real": std_real,
+            "mean_sim": mean_sim,
+            "std_sim": std_sim,
+            "z_score": z_score,
+            "score": score,
+            "scoring_table": metric_cfg["scoring_table"],
+        }
+
+    available_scores = [m["score"] for m in results.values() if m["available"]]
+    overall_score = float(np.mean(available_scores)) if available_scores else None
+    return results, overall_score
+
+
+def generate_report(protocol, p_config, metric_results, overall_score, output_dir):
+    """Generates Markdown, JSON reports and plots the comparison graph, one panel per available metric."""
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(output_dir, exist_ok=True)
-    
-    # Calculate stats
-    mean_real = np.mean(real_metrics)
-    std_real = np.std(real_metrics)
-    mean_sim = np.mean(sim_metrics)
-    std_sim = np.std(sim_metrics)
-    
+
+    available = {k: v for k, v in metric_results.items() if v["available"]}
+    unavailable = [k for k, v in metric_results.items() if not v["available"]]
+
     # 1. Save JSON data
     data = {
         "protocol": protocol,
-        "metric_name": p_config['metric_name'],
-        "metric_unit": p_config['metric_unit'],
         "timestamp": timestamp,
-        "runs": len(real_metrics),
-        "real_world": {
-            "runs": real_metrics,
-            "mean": float(mean_real),
-            "std_dev": float(std_real)
-        },
-        "simulation": {
-            "runs": sim_metrics,
-            "mean": float(mean_sim),
-            "std_dev": float(std_sim)
-        },
-        "z_score": float(z_score),
-        "score": int(score)
+        "metrics": metric_results,
+        "overall_score": overall_score,
     }
-    
     json_path = os.path.join(output_dir, f"eval_data_{protocol}_{timestamp}.json")
     with open(json_path, "w") as f:
         json.dump(data, f, indent=4)
     print(f"Saved raw JSON data to: {json_path}")
-    
-    # 2. Save Matplotlib Plot
+
+    # 2. Save Matplotlib Plot: one bar+box pair of columns per available metric
     plot_path = os.path.join(output_dir, f"eval_plot_{protocol}_{timestamp}.png")
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
-    
-    # Bar plot with standard deviation error bars
-    ax1.bar(["Real-World", "ns-3 Sim"], [mean_real, mean_sim], yerr=[std_real, std_sim], 
-            capsize=10, color=["#3498db", "#2ecc71"], edgecolor="grey", alpha=0.8)
-    ax1.set_ylabel(f"{p_config['metric_name'].capitalize()} ({p_config['metric_unit']})")
-    ax1.set_title(f"Mean {p_config['metric_name'].capitalize()} Comparison")
-    ax1.grid(axis='y', linestyle='--', alpha=0.7)
-    
-    # Box plot of the distributions
-    ax2.boxplot([real_metrics, sim_metrics])
-    ax2.set_xticklabels(["Real-World", "ns-3 Sim"])
-    ax2.set_ylabel(f"{p_config['metric_name'].capitalize()} ({p_config['metric_unit']})")
-    ax2.set_title("Metric Distribution (Boxplot)")
-    ax2.grid(linestyle='--', alpha=0.7)
-    
-    fig.suptitle(f"{p_config['name']} Evaluation: Real-World vs ns-3 Sim\nFinal Score: {score}/10 (z-score: {z_score:.4f})")
+    n = max(len(available), 1)
+    fig, axes = plt.subplots(2, n, figsize=(6 * n, 9), squeeze=False)
+    for idx, (name, m) in enumerate(available.items()):
+        ax1, ax2 = axes[0][idx], axes[1][idx]
+        ax1.bar(
+            ["Real-World", "ns-3 Sim"],
+            [m["mean_real"], m["mean_sim"]],
+            yerr=[m["std_real"], m["std_sim"]],
+            capsize=10,
+            color=["#3498db", "#2ecc71"],
+            edgecolor="grey",
+            alpha=0.8,
+        )
+        ax1.set_ylabel(f"{name.capitalize()} ({m['unit']})")
+        ax1.set_title(f"Mean {name.capitalize()} (score {m['score']}/10)")
+        ax1.grid(axis="y", linestyle="--", alpha=0.7)
+
+        ax2.boxplot([m["real"], m["sim"]])
+        ax2.set_xticklabels(["Real-World", "ns-3 Sim"])
+        ax2.set_ylabel(f"{name.capitalize()} ({m['unit']})")
+        ax2.set_title("Distribution")
+        ax2.grid(linestyle="--", alpha=0.7)
+    if not available:
+        axes[0][0].text(
+            0.5, 0.5, "No metrics available to plot", ha="center", va="center"
+        )
+        axes[1][0].axis("off")
+
+    fig.suptitle(
+        f"{p_config['name']} Evaluation: Real-World vs ns-3 Sim\n"
+        f"Overall Score: {overall_score:.2f}/10"
+        if overall_score is not None
+        else f"{p_config['name']} Evaluation: Real-World vs ns-3 Sim\nOverall Score: N/A"
+    )
     plt.tight_layout()
     plt.savefig(plot_path)
     plt.close()
     print(f"Saved comparison plot to: {plot_path}")
-    
+
     # 3. Save Markdown Report
     md_path = os.path.join(output_dir, f"eval_report_{protocol}_{timestamp}.md")
-    
-    runs_table = ""
-    for idx, (r, s) in enumerate(zip(real_metrics, sim_metrics), 1):
-        runs_table += f"| Run {idx} | {r:.4f} | {s:.4f} | {abs(r - s):.4f} |\n"
-        
-    md_content = f"""# Protocol Evaluation Report: {p_config['name']}
+
+    metrics_table = ""
+    for name, m in metric_results.items():
+        if m["available"]:
+            metrics_table += (
+                f"| {name} | {m['unit']} | {m['mean_real']:.4f} ± {m['std_real']:.4f} | "
+                f"{m['mean_sim']:.4f} ± {m['std_sim']:.4f} | {m['z_score']:.4f} | {m['score']}/10 |\n"
+            )
+        else:
+            metrics_table += f"| {name} | {m['unit']} | N/A | N/A | N/A | N/A |\n"
+
+    overall_str = f"{overall_score:.2f}/10" if overall_score is not None else "N/A"
+
+    md_content = f"""# Protocol Evaluation Report: {p_config["name"]}
 
 **Timestamp:** {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-**Final Evaluation Score:** {score}/10
+**Overall Score:** {overall_str}
 
 ## Metrics Comparison
 
-Target Metric: **{p_config['metric_name']}** ({p_config['metric_unit']})
+A metric is scored only when present in every recorded run on both the
+real-world and ns-3 sides; otherwise it's reported N/A rather than guessed.
 
-| Run Metric | Real-World | ns-3 Sim | Difference |
-| :--- | :--- | :--- | :--- |
-| **Mean** | {mean_real:.4f} | {mean_sim:.4f} | {abs(mean_real - mean_sim):.4f} |
-| **Std Dev** | {std_real:.4f} | {std_sim:.4f} | - |
+| Metric | Unit | Real-World (mean ± std) | ns-3 Sim (mean ± std) | Z-Score | Score |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+{metrics_table}
+"""
+    if unavailable:
+        md_content += f"\n**Not scored (missing from at least one side's output):** {', '.join(unavailable)}\n"
 
-### Run-by-Run Values
-
-| Run # | Real-World ({p_config['metric_unit']}) | ns-3 Sim ({p_config['metric_unit']}) | Absolute Diff ({p_config['metric_unit']}) |
-| :--- | :--- | :--- | :--- |
-{runs_table}
-
+    md_content += """
 ## Statistical Significance & Scoring
 
-- **Z-Score Difference:** `{z_score:.4f}`
-  *(Calculated as: `|mean_sim - mean_real| / std_dev_real`)*
-- **Score:** `{score}/10`
-
-### Stepwise Scoring Configuration Used:
-| Max Z-Score Difference | Resulting Score |
-| :--- | :--- |
+- **Z-Score:** `|mean_sim - mean_real| / std_dev_real` (per metric)
+- **Overall score:** mean of per-metric scores
 """
-    for threshold, scr in sorted(p_config['scoring_table'], key=lambda x: x[0]):
-        mark = " (Selected)" if z_score <= threshold and score == scr else ""
-        md_content += f"| $\\le$ {threshold} | {scr}/10{mark} |\n"
-        
+    for name, m in available.items():
+        md_content += (
+            f"\n### {name} scoring table\n| Max Z-Score | Score |\n| :--- | :--- |\n"
+        )
+        for threshold, scr in sorted(m["scoring_table"], key=lambda x: x[0]):
+            mark = (
+                " (Selected)" if m["z_score"] <= threshold and m["score"] == scr else ""
+            )
+            md_content += f"| $\\le$ {threshold} | {scr}/10{mark} |\n"
+
     md_content += f"""
 ## Visualization
 
@@ -389,65 +474,72 @@ Target Metric: **{p_config['metric_name']}** ({p_config['metric_unit']})
     with open(md_path, "w") as f:
         f.write(md_content)
     print(f"Saved Markdown report to: {md_path}")
-    
-    # Print terminal output summary
-    print("\n" + "="*50)
+
+    print("\n" + "=" * 50)
     print(f"EVALUATION SUMMARY: {p_config['name']}")
-    print("="*50)
-    print(f"Real-World Mean: {mean_real:.4f} ± {std_real:.4f} {p_config['metric_unit']}")
-    print(f"ns-3 Sim Mean:   {mean_sim:.4f} ± {std_sim:.4f} {p_config['metric_unit']}")
-    print(f"Z-Score Diff:    {z_score:.4f}")
-    print(f"Final Score:     {score}/10")
-    print("="*50 + "\n")
+    print("=" * 50)
+    for name, m in metric_results.items():
+        if m["available"]:
+            print(
+                f"{name}: real {m['mean_real']:.4f} ± {m['std_real']:.4f} {m['unit']} | "
+                f"sim {m['mean_sim']:.4f} ± {m['std_sim']:.4f} {m['unit']} | "
+                f"z={m['z_score']:.4f} | score {m['score']}/10"
+            )
+        else:
+            print(f"{name}: N/A (missing from at least one side)")
+    print(f"Overall Score: {overall_str}")
+    print("=" * 50 + "\n")
+
 
 def main():
     parser = argparse.ArgumentParser(description="ns-3 Conformance Evaluation Bench")
     parser.add_argument("--config", default="config.toml", help="Path to config.toml")
-    parser.add_argument("--protocol", required=True, choices=["tcp", "udp", "dhcp", "arp"], help="Protocol to evaluate")
+    parser.add_argument(
+        "--protocol",
+        required=True,
+        help="Protocol to evaluate (must be a key under [protocols] in config.toml)",
+    )
     parser.add_argument("--runs", type=int, help="Override number of runs")
     parser.add_argument("--timeout", type=int, help="Override run timeout (seconds)")
     args = parser.parse_args()
-    
+
     if not os.path.exists(args.config):
         print(f"Error: Configuration file '{args.config}' not found.")
         sys.exit(1)
-        
+
     with open(args.config, "rb") as f:
         config = tomllib.load(f)
-        
+
     protocol = args.protocol
-    p_config = config['protocols'][protocol]
-    
-    num_runs = args.runs or config['global'].get('number_of_runs', 5)
-    timeout = args.timeout or config['global'].get('timeout', 60)
-    output_dir = config['global'].get('output_dir', "./eval_results")
-    
+    if protocol not in config.get("protocols", {}):
+        available = ", ".join(sorted(config.get("protocols", {}).keys()))
+        print(f"Error: Unknown protocol '{protocol}'. Available: {available}")
+        sys.exit(1)
+    p_config = config["protocols"][protocol]
+
+    if p_config.get("parser") not in PARSERS:
+        print(
+            f"Error: Unknown parser '{p_config.get('parser')}' for protocol '{protocol}'. "
+            f"Available: {', '.join(PARSERS.keys())}"
+        )
+        sys.exit(1)
+
+    num_runs = args.runs or config["global"].get("number_of_runs", 5)
+    timeout = args.timeout or config["global"].get("timeout", 60)
+    output_dir = config["global"].get("output_dir", "./eval_results")
+
     client = docker.from_env()
-    
-    # Run Real-World tests
-    real_metrics, real_raw = run_real_world(client, protocol, config, num_runs, timeout, output_dir)
-    
-    # Run Simulation tests
-    sim_metrics, sim_raw = run_ns3_simulation(client, protocol, config, num_runs, timeout, output_dir)
-    
-    # Calculate difference metrics
-    mean_real = np.mean(real_metrics)
-    std_real = np.std(real_metrics)
-    mean_sim = np.mean(sim_metrics)
-    
-    if std_real == 0.0:
-        if mean_real == mean_sim:
-            z_score = 0.0
-        else:
-            # Handle standard deviation of zero by using epsilon
-            z_score = abs(mean_sim - mean_real) / 1e-6
-    else:
-        z_score = abs(mean_sim - mean_real) / std_real
-        
-    score = calculate_score(z_score, p_config['scoring_table'])
-    
-    # Generate report and plot
-    generate_report(protocol, p_config, real_metrics, sim_metrics, z_score, score, output_dir)
+
+    real_metrics, real_raw = run_real_world(
+        client, protocol, config, num_runs, timeout, output_dir
+    )
+    sim_metrics, sim_raw = run_ns3_simulation(
+        client, protocol, config, num_runs, timeout, output_dir
+    )
+
+    metric_results, overall_score = score_metrics(p_config, real_metrics, sim_metrics)
+    generate_report(protocol, p_config, metric_results, overall_score, output_dir)
+
 
 if __name__ == "__main__":
     main()
