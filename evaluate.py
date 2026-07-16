@@ -41,17 +41,28 @@ def run_pre_install_cmds(container, cmds, label):
 
 
 def provision_container(container, p_config, side):
-    """Adds any vendor repos and installs packages inside one container (server or client)."""
+    """Adds any vendor repos and installs packages inside one container (server or client).
+
+    Raises RuntimeError on apt-get failure instead of continuing silently -
+    a missing traffic-generator binary would otherwise fail every run and
+    get absorbed as a silent N/A instead of a clear setup error.
+    """
     label = side
     run_pre_install_cmds(container, p_config.get(f"{side}_pre_install_cmds", []), label)
     print(f"Dynamically installing packages inside {label} container...")
-    container.exec_run("apt-get update", user="root")
+    code, out = container.exec_run("apt-get update", user="root")
+    if code != 0:
+        raise RuntimeError(
+            f"{label} apt-get update failed: {out.decode(errors='ignore')}"
+        )
     packages = p_config.get(f"{side}_packages", [])
     if packages:
         install_cmd = "apt-get install -y " + " ".join(packages)
         code, out = container.exec_run(install_cmd, user="root")
         if code != 0:
-            print(f"{label.capitalize()} packages installation failed: {out.decode()}")
+            raise RuntimeError(
+                f"{label} package installation failed: {out.decode(errors='ignore')}"
+            )
 
 
 def ensure_image(client, image_name):
@@ -164,27 +175,54 @@ def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
             time.sleep(1)
 
             server_cmd = p_config["server_cmd"]
-            print(f"  Starting server: {server_cmd}")
-            try:
-                server_container.exec_run(server_cmd, detach=True, user="root")
-            except docker.errors.APIError as e:
-                print(f"  Server command failed to start: {e}")
-            time.sleep(2)  # Wait for server to bind
-
             client_cmd = p_config["client_cmd"]
-            print(f"  Running client: {client_cmd}")
-            start_time = time.time()
-            try:
-                code, out = client_container.exec_run(client_cmd, user="root")
-                stdout_text = out.decode("utf-8", errors="ignore")
-            except docker.errors.APIError as e:
-                print(f"  Client command failed to run: {e}")
-                code, stdout_text = -1, ""
-            duration = time.time() - start_time
+            timed_client_cmd = ["bash", "-c", f"timeout -k 5 {timeout}s {client_cmd}"]
+
+            code, stdout_text, duration = -1, "", 0.0
+            max_attempts = 3
+            for attempt in range(1, max_attempts + 1):
+                # server_cmd is often one-shot (e.g. `iperf3 -s -1`) - restart
+                # it every attempt, not just once, or retries hit a dead server.
+                if attempt > 1:
+                    clean_leftover_processes(server_container, p_config)
+                    clean_leftover_processes(client_container, p_config)
+                    time.sleep(1)
+                print(f"  Starting server: {server_cmd}")
+                try:
+                    server_container.exec_run(server_cmd, detach=True, user="root")
+                except docker.errors.APIError as e:
+                    print(f"  Server command failed to start: {e}")
+                time.sleep(2)  # Wait for server to bind
+
+                print(
+                    f"  Running client (attempt {attempt}/{max_attempts}): {client_cmd}"
+                )
+                start_time = time.time()
+                try:
+                    code, out = client_container.exec_run(timed_client_cmd, user="root")
+                    stdout_text = out.decode("utf-8", errors="ignore")
+                except docker.errors.APIError as e:
+                    print(f"  Client command failed to run: {e}")
+                    code, stdout_text = -1, ""
+                duration = time.time() - start_time
+                if code == 0:
+                    break
+                if code == 124:
+                    print(f"  Client command timed out after {timeout}s")
+                else:
+                    print(f"  Client command exited {code}, retrying")
+
+            if code != 0:
+                print(
+                    f"  Run {run} FAILED after {max_attempts} attempts (last exit code {code})"
+                )
+                # Discard rather than parse - partial output can still match
+                # a metric's regex and pollute the mean with a bogus value.
+                stdout_text = ""
 
             raw_outputs.append(stdout_text)
 
-            res = parser_fn(stdout_text)
+            res = parser_fn(stdout_text) if code == 0 else {}
             print(f"  Parsed metrics: {res} (Code: {code}, Duration: {duration:.2f}s)")
             metrics_per_run.append(res)
 
@@ -255,18 +293,33 @@ def run_ns3_simulation(client, protocol, config, num_runs, timeout, output_dir):
 
         time.sleep(1)
 
+        # run_sim.sh reconfigures with --enable-examples --enable-tests every
+        # call, forcing a full rebuild on a fresh container - give it a floor
+        # so a short `timeout` can't SIGKILL a legitimate first-run build.
+        ns3_timeout = max(timeout, 300)
+
         for run in range(1, num_runs + 1):
             print(f"Run {run}/{num_runs}...")
 
             start_time = time.time()
             try:
+                # NS_GLOBAL_VALUE seeds RngRun per run without touching
+                # run_sim.sh, which other callers also use.
                 code, out = sim_container.exec_run(
-                    ["/app/ns-3/run_sim.sh", ns3_script], user="root"
+                    [
+                        "bash",
+                        "-c",
+                        f"timeout -k 5 {ns3_timeout}s /app/ns-3/run_sim.sh {ns3_script}",
+                    ],
+                    user="root",
+                    environment={"NS_GLOBAL_VALUE": f"RngRun={run}"},
                 )
                 stdout_text = out.decode("utf-8", errors="ignore")
             except docker.errors.APIError as e:
                 print(f"  ns-3 run failed: {e}")
                 code, stdout_text = -1, ""
+            if code == 124:
+                print(f"  ns-3 run timed out after {ns3_timeout}s")
             duration = time.time() - start_time
             raw_outputs.append(stdout_text)
 
@@ -296,34 +349,51 @@ def calculate_score(z_score, scoring_table):
     return 0
 
 
-def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run):
+def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run, global_cfg=None):
     """
-    Scores every metric declared in the protocol config that is present in
-    every recorded run on both sides. Metrics missing on either side (e.g. a
-    sim script that doesn't emit jitter) are reported as N/A, never
-    defaulted to 0 - a missing measurement is not the same as a zero one.
+    Scores every metric present in at least `min_run_coverage` fraction of
+    runs on both sides (default 80%, [global] in config.toml); below that
+    it's N/A rather than 0 - a missing measurement isn't a zero one.
+
+    Z-score divides by a pooled std (real+sim) floored at 0.5% of the
+    real-world mean, rather than std_real alone - real-world runs on a
+    localhost docker network have near-zero natural variance, so std_real
+    alone let 4th-decimal-place noise blow up the z-score.
 
     Returns:
         dict: {metric_name: {"available": bool, "real": [...], "sim": [...],
                               "mean_real", "std_real", "mean_sim", "std_sim",
-                              "z_score", "score", "unit"}}
+                              "z_score", "score", "unit", "coverage"}}
         float or None: overall score (mean of available per-metric scores)
     """
+    global_cfg = global_cfg or {}
+    min_coverage = global_cfg.get("min_run_coverage", 0.8)
+
     results = {}
     for metric_cfg in p_config.get("metrics", []):
         name = metric_cfg["name"]
         real_vals = [r[name] for r in real_metrics_per_run if name in r]
         sim_vals = [s[name] for s in sim_metrics_per_run if name in s]
 
+        n_real = len(real_metrics_per_run)
+        n_sim = len(sim_metrics_per_run)
+        real_coverage = len(real_vals) / n_real if n_real else 0.0
+        sim_coverage = len(sim_vals) / n_sim if n_sim else 0.0
+        coverage_str = f"{len(real_vals)}/{n_real} real, {len(sim_vals)}/{n_sim} sim"
+
         available = (
-            len(real_vals) == len(real_metrics_per_run)
-            and len(real_vals) > 0
-            and len(sim_vals) == len(sim_metrics_per_run)
+            len(real_vals) > 0
             and len(sim_vals) > 0
+            and real_coverage >= min_coverage
+            and sim_coverage >= min_coverage
         )
 
         if not available:
-            results[name] = {"available": False, "unit": metric_cfg.get("unit", "")}
+            results[name] = {
+                "available": False,
+                "unit": metric_cfg.get("unit", ""),
+                "coverage": coverage_str,
+            }
             continue
 
         mean_real = float(np.mean(real_vals))
@@ -331,16 +401,17 @@ def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run):
         mean_sim = float(np.mean(sim_vals))
         std_sim = float(np.std(sim_vals))
 
-        if std_real == 0.0:
-            z_score = 0.0 if mean_real == mean_sim else abs(mean_sim - mean_real) / 1e-6
-        else:
-            z_score = abs(mean_sim - mean_real) / std_real
+        pooled_std = float(np.sqrt((std_real**2 + std_sim**2) / 2))
+        epsilon_floor = max(1e-9, 0.005 * abs(mean_real))
+        denom = max(pooled_std, epsilon_floor)
+        z_score = abs(mean_sim - mean_real) / denom
 
         score = calculate_score(z_score, metric_cfg["scoring_table"])
 
         results[name] = {
             "available": True,
             "unit": metric_cfg.get("unit", ""),
+            "coverage": coverage_str,
             "real": real_vals,
             "sim": sim_vals,
             "mean_real": mean_real,
@@ -357,7 +428,9 @@ def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run):
     return results, overall_score
 
 
-def generate_report(protocol, p_config, metric_results, overall_score, output_dir):
+def generate_report(
+    protocol, p_config, metric_results, overall_score, output_dir, min_run_coverage=0.8
+):
     """Generates Markdown, JSON reports and plots the comparison graph, one panel per available metric."""
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     os.makedirs(output_dir, exist_ok=True)
@@ -426,12 +499,13 @@ def generate_report(protocol, p_config, metric_results, overall_score, output_di
         if m["available"]:
             metrics_table += (
                 f"| {name} | {m['unit']} | {m['mean_real']:.4f} ± {m['std_real']:.4f} | "
-                f"{m['mean_sim']:.4f} ± {m['std_sim']:.4f} | {m['z_score']:.4f} | {m['score']}/10 |\n"
+                f"{m['mean_sim']:.4f} ± {m['std_sim']:.4f} | {m['z_score']:.4f} | {m['score']}/10 | {m['coverage']} |\n"
             )
         else:
-            metrics_table += f"| {name} | {m['unit']} | N/A | N/A | N/A | N/A |\n"
+            metrics_table += f"| {name} | {m['unit']} | N/A | N/A | N/A | N/A | {m['coverage']} |\n"
 
     overall_str = f"{overall_score:.2f}/10" if overall_score is not None else "N/A"
+    min_cov_pct = min_run_coverage * 100
 
     md_content = f"""# Protocol Evaluation Report: {p_config["name"]}
 
@@ -440,20 +514,26 @@ def generate_report(protocol, p_config, metric_results, overall_score, output_di
 
 ## Metrics Comparison
 
-A metric is scored only when present in every recorded run on both the
-real-world and ns-3 sides; otherwise it's reported N/A rather than guessed.
+A metric is scored only when present in at least {min_cov_pct:.0f}% of
+recorded runs on both the real-world and ns-3 sides; otherwise it's
+reported N/A rather than guessed.
 
-| Metric | Unit | Real-World (mean ± std) | ns-3 Sim (mean ± std) | Z-Score | Score |
-| :--- | :--- | :--- | :--- | :--- | :--- |
+| Metric | Unit | Real-World (mean ± std) | ns-3 Sim (mean ± std) | Z-Score | Score | Coverage |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
 {metrics_table}
 """
     if unavailable:
-        md_content += f"\n**Not scored (missing from at least one side's output):** {', '.join(unavailable)}\n"
+        md_content += f"\n**Not scored (below run-coverage threshold on at least one side):** {', '.join(unavailable)}\n"
 
     md_content += """
 ## Statistical Significance & Scoring
 
-- **Z-Score:** `|mean_sim - mean_real| / std_dev_real` (per metric)
+- **Z-Score:** `|mean_sim - mean_real| / max(pooled_std, epsilon_floor)`, where
+  `pooled_std = sqrt((std_real^2 + std_sim^2) / 2)` and
+  `epsilon_floor = max(1e-9, 0.005 * |mean_real|)` - the floor prevents a
+  near-zero real-world std (containers on a localhost network are nearly
+  deterministic) from turning a negligible mean difference into a runaway
+  z-score.
 - **Overall score:** mean of per-metric scores
 """
     for name, m in available.items():
@@ -486,7 +566,7 @@ real-world and ns-3 sides; otherwise it's reported N/A rather than guessed.
                 f"z={m['z_score']:.4f} | score {m['score']}/10"
             )
         else:
-            print(f"{name}: N/A (missing from at least one side)")
+            print(f"{name}: N/A (coverage {m['coverage']}, below threshold)")
     print(f"Overall Score: {overall_str}")
     print("=" * 50 + "\n")
 
@@ -537,8 +617,17 @@ def main():
         client, protocol, config, num_runs, timeout, output_dir
     )
 
-    metric_results, overall_score = score_metrics(p_config, real_metrics, sim_metrics)
-    generate_report(protocol, p_config, metric_results, overall_score, output_dir)
+    metric_results, overall_score = score_metrics(
+        p_config, real_metrics, sim_metrics, config["global"]
+    )
+    generate_report(
+        protocol,
+        p_config,
+        metric_results,
+        overall_score,
+        output_dir,
+        config["global"].get("min_run_coverage", 0.8),
+    )
 
 
 if __name__ == "__main__":

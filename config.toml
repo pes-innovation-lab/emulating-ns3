@@ -4,13 +4,14 @@
 # - point `parser` at a function in parsers.PARSERS
 # - list `cleanup_cmds` to kill leftover processes between runs
 # - declare a `metrics` table per metric to score.
-# A metric is only scored if it's declared here and present in
-# both the real-world and ns-3 output for every run
+# A metric is only scored if it's declared here and present in at least
+# min_run_coverage fraction of runs on both the real-world and ns-3 sides
 
 [global]
 number_of_runs = 5
 timeout = 60
 output_dir = "./eval_results"
+min_run_coverage = 0.8
 
 [protocols.tcp]
 name = "TCP"
