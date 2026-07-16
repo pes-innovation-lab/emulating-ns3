@@ -12,7 +12,7 @@ double g_startTimeMs = 1000.0; // Client starts at 1.0s (1000ms)
 bool g_leaseObtained = false;
 
 void LeaseObtainedCallback(const Ipv4Address &address) {
-  double nowMs = Simulator::Now().GetMilliSeconds();
+  double nowMs = Simulator::Now().GetSeconds() * 1000.0;
   double latencyMs = nowMs - g_startTimeMs;
   std::cout << "NS3_METRIC latency: " << latencyMs << " ms" << std::endl;
   std::cout << "NS3_METRIC loss: 0.0 %" << std::endl;
@@ -28,7 +28,13 @@ int main(int argc, char *argv[]) {
 
   CsmaHelper csma;
   csma.SetChannelAttribute("DataRate", StringValue("100Mbps"));
-  csma.SetChannelAttribute("Delay", StringValue("0.1ms"));
+  // Delay sampled once per run (seeded via RngRun) instead of a fixed
+  // 0.1ms - a fixed channel delay made every run's latency bit-identical,
+  // so std_sim was always 0 regardless of num_runs.
+  Ptr<UniformRandomVariable> delayRv = CreateObject<UniformRandomVariable>();
+  delayRv->SetAttribute("Min", DoubleValue(0.05));
+  delayRv->SetAttribute("Max", DoubleValue(0.15));
+  csma.SetChannelAttribute("Delay", TimeValue(MilliSeconds(delayRv->GetValue())));
 
   NetDeviceContainer devices;
   devices = csma.Install(nodes);

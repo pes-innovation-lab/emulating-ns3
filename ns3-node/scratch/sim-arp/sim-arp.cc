@@ -18,14 +18,16 @@ const uint32_t kArpFrameSize = 64;
 
 void SniffTx(Ptr<const Packet> packet) {
   if (packet->GetSize() == kArpFrameSize) {
-    g_arpRequestTimeMs = Simulator::Now().GetMilliSeconds();
+    // Sub-ms precision - GetMilliSeconds() truncates to int64 and would
+    // read as 0 for the sub-millisecond RTTs arping actually reports.
+    g_arpRequestTimeMs = Simulator::Now().GetSeconds() * 1000.0;
   }
 }
 
 void SniffRx(Ptr<const Packet> packet) {
   if (packet->GetSize() == kArpFrameSize) {
     if (g_arpRequestTimeMs > 0.0 && !g_arpResolved) {
-      double nowMs = Simulator::Now().GetMilliSeconds();
+      double nowMs = Simulator::Now().GetSeconds() * 1000.0;
       double rttMs = nowMs - g_arpRequestTimeMs;
       std::cout << "NS3_METRIC latency: " << rttMs << " ms" << std::endl;
       std::cout << "NS3_METRIC loss: 0.0 %" << std::endl;
@@ -43,7 +45,13 @@ int main(int argc, char *argv[]) {
 
   CsmaHelper csma;
   csma.SetChannelAttribute("DataRate", StringValue("1Gbps"));
-  csma.SetChannelAttribute("Delay", StringValue("0.1ms"));
+  // Delay sampled once per run (seeded via RngRun) instead of a fixed
+  // 0.1ms - a fixed channel delay made every run's latency bit-identical,
+  // so std_sim was always 0 regardless of num_runs.
+  Ptr<UniformRandomVariable> delayRv = CreateObject<UniformRandomVariable>();
+  delayRv->SetAttribute("Min", DoubleValue(0.05));
+  delayRv->SetAttribute("Max", DoubleValue(0.15));
+  csma.SetChannelAttribute("Delay", TimeValue(MilliSeconds(delayRv->GetValue())));
 
   NetDeviceContainer devices;
   devices = csma.Install(nodes);
