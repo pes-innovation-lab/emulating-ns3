@@ -4,9 +4,31 @@
 #include "ns3/point-to-point-module.h"
 #include "ns3/applications-module.h"
 
+#include <cmath>
+#include <vector>
+
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE ("SimTcpEvaluation");
+
+static std::vector<double> g_rttSamplesMs;
+
+void
+RttTracer (Time oldRtt, Time newRtt)
+{
+  g_rttSamplesMs.push_back (newRtt.GetSeconds () * 1000.0);
+}
+
+void
+ConnectRttTrace (uint32_t nodeId)
+{
+  // BulkSend's socket doesn't exist until StartApplication runs, so this
+  // is scheduled to fire just after Start() instead of connecting before
+  // Run() - the wildcard path only matches sockets that already exist.
+  Config::ConnectWithoutContext (
+      "/NodeList/" + std::to_string (nodeId) + "/$ns3::TcpL4Protocol/SocketList/*/RTT",
+      MakeCallback (&RttTracer));
+}
 
 int main (int argc, char *argv[])
 {
@@ -20,7 +42,13 @@ int main (int argc, char *argv[])
 
   PointToPointHelper pointToPoint;
   pointToPoint.SetDeviceAttribute ("DataRate", StringValue ("1Gbps"));
-  pointToPoint.SetChannelAttribute ("Delay", StringValue ("0.1ms"));
+  // Delay sampled once per run (seeded via RngRun) instead of a fixed
+  // 0.1ms - a fixed channel delay made every run's RTT samples cluster
+  // around the same value regardless of num_runs.
+  Ptr<UniformRandomVariable> delayRv = CreateObject<UniformRandomVariable> ();
+  delayRv->SetAttribute ("Min", DoubleValue (0.05));
+  delayRv->SetAttribute ("Max", DoubleValue (0.15));
+  pointToPoint.SetChannelAttribute ("Delay", TimeValue (MilliSeconds (delayRv->GetValue ())));
 
   NetDeviceContainer devices;
   devices = pointToPoint.Install (nodes);
@@ -52,6 +80,8 @@ int main (int argc, char *argv[])
   sourceApp.Start (Seconds (0.5));
   sourceApp.Stop (Seconds (5.5));
 
+  Simulator::Schedule (Seconds (0.51), &ConnectRttTrace, nodes.Get (1)->GetId ());
+
   Simulator::Stop (Seconds (6.0));
   Simulator::Run ();
 
@@ -61,7 +91,20 @@ int main (int argc, char *argv[])
   double duration = 5.0; // Client ran for 5.5 - 0.5 = 5 seconds
   double throughputMbps = (totalBytesReceived * 8.0) / (duration * 1e6);
 
+  double jitterMs = 0.0;
+  if (g_rttSamplesMs.size () > 1)
+    {
+      double mean = 0.0;
+      for (double d : g_rttSamplesMs) mean += d;
+      mean /= g_rttSamplesMs.size ();
+      double variance = 0.0;
+      for (double d : g_rttSamplesMs) variance += (d - mean) * (d - mean);
+      variance /= g_rttSamplesMs.size ();
+      jitterMs = std::sqrt (variance);
+    }
+
   std::cout << "NS3_METRIC throughput: " << throughputMbps << " Mbps" << std::endl;
+  std::cout << "NS3_METRIC jitter: " << jitterMs << " ms" << std::endl;
 
   Simulator::Destroy ();
   return 0;

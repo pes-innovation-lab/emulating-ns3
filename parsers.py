@@ -24,6 +24,14 @@ def parse_iperf3(stdout_text):
                 result["throughput"] = (
                     end["sum_received"].get("bits_per_second", 0.0) / 1e6
                 )
+                # TCP_INFO per-stream stats (Linux kernel only). rttvar is
+                # TCP's actual jitter equivalent - kernel-measured RTT
+                # variance, not a UDP-style inter-packet spacing measure.
+                streams = end.get("streams", [])
+                if streams and "sender" in streams[0]:
+                    sender = streams[0]["sender"]
+                    if "rttvar" in sender:
+                        result["jitter"] = sender["rttvar"] / 1000.0  # usec -> ms
             if "sum" in end and "bits_per_second" in end["sum"]:
                 result["throughput"] = end["sum"].get("bits_per_second", 0.0) / 1e6
                 if "jitter_ms" in end["sum"]:
