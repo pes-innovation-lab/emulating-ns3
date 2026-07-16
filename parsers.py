@@ -25,20 +25,24 @@ def parse_iperf3(stdout_text):
                 result["throughput"] = (
                     end["sum_received"].get("bits_per_second", 0.0) / 1e6
                 )
-                # TCP_INFO per-stream stats (Linux kernel only). rttvar is
-                # TCP's actual jitter equivalent - kernel-measured RTT
-                # variance, not a UDP-style inter-packet spacing measure.
+                # TCP_INFO per-stream stats (Linux kernel only). iperf3's
+                # actual field names are mean_rtt/min_rtt/max_rtt (usec) and
+                # max_snd_cwnd (bytes), not rtt/rttvar/snd_cwnd - verified
+                # against real iperf3 3.16 -J output. There's no rttvar
+                # field in this schema at all, so jitter uses max_rtt -
+                # min_rtt (the observed RTT spread) as the closest available
+                # proxy instead.
                 streams = end.get("streams", [])
                 if streams and "sender" in streams[0]:
                     sender = streams[0]["sender"]
-                    if "rtt" in sender:
-                        result["latency"] = sender["rtt"] / 1000.0  # usec -> ms
-                    if "rttvar" in sender:
-                        result["jitter"] = sender["rttvar"] / 1000.0  # usec -> ms
+                    if "mean_rtt" in sender:
+                        result["latency"] = sender["mean_rtt"] / 1000.0  # usec -> ms
+                    if "max_rtt" in sender and "min_rtt" in sender:
+                        result["jitter"] = (sender["max_rtt"] - sender["min_rtt"]) / 1000.0
                     if "retransmits" in sender:
                         result["retransmits"] = float(sender["retransmits"])
-                    if "snd_cwnd" in sender:
-                        result["snd_cwnd"] = sender["snd_cwnd"] / 1024.0  # bytes -> KB
+                    if "max_snd_cwnd" in sender:
+                        result["snd_cwnd"] = sender["max_snd_cwnd"] / 1024.0  # bytes -> KB
             if "sum" in end and "bits_per_second" in end["sum"]:
                 result["throughput"] = end["sum"].get("bits_per_second", 0.0) / 1e6
                 if "jitter_ms" in end["sum"]:
@@ -232,12 +236,12 @@ if __name__ == "__main__":
     assert parse_iperf3("garbage no numbers here") == {}
     assert parse_iperf3(
         '{"end": {"sum_received": {"bits_per_second": 94500000.0}, '
-        '"streams": [{"sender": {"rtt": 250, "rttvar": 45, "retransmits": 3, '
-        '"snd_cwnd": 131072}}]}}'
+        '"streams": [{"sender": {"mean_rtt": 250, "min_rtt": 205, "max_rtt": 295, '
+        '"retransmits": 3, "max_snd_cwnd": 131072}}]}}'
     ) == {
         "throughput": 94.5,
         "latency": 0.25,
-        "jitter": 0.045,
+        "jitter": 0.09,
         "retransmits": 3.0,
         "snd_cwnd": 128.0,
     }
