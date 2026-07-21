@@ -31,7 +31,7 @@ int main(int argc, char *argv[]) {
   nodes.Create(2); // Node 0: Server, Node 1: Client
 
   CsmaHelper csma;
-  csma.SetChannelAttribute("DataRate", StringValue("100Mbps"));
+  csma.SetChannelAttribute("DataRate", StringValue("1Gbps"));
   // Delay sampled once per run (seeded via RngRun) so std_sim isn't always
   // 0. Applied via MicroSeconds, not MilliSeconds: MilliSeconds(double)
   // truncates to whole ms, silently zeroing any sub-1ms value.
