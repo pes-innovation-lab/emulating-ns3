@@ -13,21 +13,29 @@ timeout = 60
 output_dir = "./eval_results"
 min_run_coverage = 0.8
 
+# Real-world baseline runs over a physical Ethernet link
+[real_world]
+client_macvlan_parent = "eth0"     # physical NIC on this host, wired to the cable
+server_macvlan_parent = "enp0s20f0u2u1"     # physical NIC on the remote host, wired to the same cable
+subnet = "10.10.0.0/24"            # same addressing scheme protocols.*.client_cmd already targets
+client_ip = "10.10.0.2"
+server_ip = "10.10.0.1"
+remote_ssh_host = "maggi@172.16.172.123"
+
 [protocols.tcp]
 name = "TCP"
-client_image = "ubuntu:24.04"
-server_image = "ubuntu:24.04"
-client_packages = ["iperf3"]
-server_packages = ["iperf3"]
+client_image = "networkstatic/iperf3"
+server_image = "networkstatic/iperf3"
 client_cmd = "iperf3 -c 10.10.0.1 -t 5 -b 1G -J"
 server_cmd = "iperf3 -s -1"
 ns3_script = "sim-tcp"
 parser = "iperf3"
-cleanup_cmds = ["pkill -9 iperf3"]
+cleanup_cmds = ["kill -9 $(pidof iperf3) 2>/dev/null || true"]
 
 [[protocols.tcp.metrics]]
 name = "throughput"
 unit = "Mbps"
+max_value = 1000            # physical link capacity (1Gbps)
 scoring_table = [
     [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]
@@ -62,19 +70,18 @@ scoring_table = [
 
 [protocols.udp]
 name = "UDP"
-client_image = "ubuntu:24.04"
-server_image = "ubuntu:24.04"
-client_packages = ["iperf3"]
-server_packages = ["iperf3"]
+client_image = "networkstatic/iperf3"
+server_image = "networkstatic/iperf3"
 client_cmd = "iperf3 -c 10.10.0.1 -u -b 10M -t 5 -J"
 server_cmd = "iperf3 -s -1"
 ns3_script = "sim-udp"
 parser = "iperf3"
-cleanup_cmds = ["pkill -9 iperf3"]
+cleanup_cmds = ["kill -9 $(pidof iperf3) 2>/dev/null || true"]
 
 [[protocols.udp.metrics]]
 name = "throughput"
 unit = "Mbps"
+max_value = 10               # the ceiling this test can hit
 scoring_table = [
     [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]
@@ -89,6 +96,7 @@ scoring_table = [
 [[protocols.udp.metrics]]
 name = "loss"
 unit = "%"
+max_value = 100              # loss is a percentage
 scoring_table = [
     [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]
@@ -104,8 +112,8 @@ client_pre_install_cmds = [
     "curl -1sLf 'https://dl.cloudsmith.io/public/isc/kea-3-2/setup.deb.sh' | bash",
 ]
 server_packages = ["dnsmasq", "iproute2"]
-client_cmd = "perfdhcp -4 -r 5 -p 2 -R 5 -l nk0 -W 300000"
-server_cmd = "dnsmasq -d -C /dev/null --port=0 --dhcp-range=10.10.0.10,10.10.0.100,12h --interface=nk0 --no-ping"
+client_cmd = "perfdhcp -4 -r 5 -p 2 -R 5 -l eth0 -W 300000"
+server_cmd = "dnsmasq -d -C /dev/null --port=0 --dhcp-range=10.10.0.10,10.10.0.100,12h --interface=eth0 --no-ping"
 ns3_script = "sim-dhcp"
 parser = "perfdhcp"
 cleanup_cmds = ["pkill -9 dnsmasq", "pkill -9 perfdhcp"]
@@ -120,6 +128,7 @@ scoring_table = [
 [[protocols.dhcp.metrics]]
 name = "loss"
 unit = "%"
+max_value = 100              # loss is a percentage
 scoring_table = [
     [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]
@@ -130,7 +139,7 @@ client_image = "ubuntu:24.04"
 server_image = "ubuntu:24.04"
 client_packages = ["arping", "iproute2"]
 server_packages = ["iproute2"]
-client_cmd = "arping -c 5 -I nk0 10.10.0.1"
+client_cmd = "arping -c 5 -I eth0 10.10.0.1"
 server_cmd = "tail -f /dev/null"
 ns3_script = "sim-arp"
 parser = "arping"
@@ -153,6 +162,7 @@ scoring_table = [
 [[protocols.arp.metrics]]
 name = "loss"
 unit = "%"
+max_value = 100              # loss is a percentage
 scoring_table = [
     [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]

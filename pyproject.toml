@@ -7,4 +7,5 @@ dependencies = [
     "docker>=7.1.0",
     "matplotlib>=3.9.0",
     "numpy>=1.26.0",
+    "paramiko>=5.0.0",
 ]

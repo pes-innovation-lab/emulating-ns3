@@ -11,6 +11,8 @@ comes from config.toml - adding a protocol needs no changes here.
 import argparse
 import datetime
 import os
+import socket
+import subprocess
 import sys
 import time
 
@@ -48,14 +50,18 @@ def provision_container(container, p_config, side):
     get absorbed as a silent N/A instead of a clear setup error.
     """
     label = side
-    run_pre_install_cmds(container, p_config.get(f"{side}_pre_install_cmds", []), label)
+    pre_install_cmds = p_config.get(f"{side}_pre_install_cmds", [])
+    packages = p_config.get(f"{side}_packages", [])
+    if not pre_install_cmds and not packages:
+        return  # image already has what it needs - skip apt-get entirely
+
+    run_pre_install_cmds(container, pre_install_cmds, label)
     print(f"Dynamically installing packages inside {label} container...")
     code, out = container.exec_run("apt-get update", user="root")
     if code != 0:
         raise RuntimeError(
             f"{label} apt-get update failed: {out.decode(errors='ignore')}"
         )
-    packages = p_config.get(f"{side}_packages", [])
     if packages:
         install_cmd = "apt-get install -y " + " ".join(packages)
         code, out = container.exec_run(install_cmd, user="root")
@@ -77,54 +83,144 @@ def ensure_image(client, image_name):
 def clean_leftover_processes(container, p_config):
     """Kills any leftover processes from previous runs inside the container."""
     for cmd in p_config.get("cleanup_cmds", []):
-        container.exec_run(cmd, user="root")
+        container.exec_run(["sh", "-c", cmd], user="root")
 
 
-def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
-    """Runs the real-world baseline containers using pair-ns-3 driver."""
-    print("\n--- Part 1: Running Real-World baseline ---")
-    p_config = config["protocols"][protocol]
-    parser_fn = PARSERS[p_config["parser"]]
+def get_remote_docker_client(rw_config):
+    return docker.DockerClient(
+        base_url=f"ssh://{rw_config['remote_ssh_host']}", use_ssh_client=True
+    )
 
-    net_name = f"eval_net_{protocol}"
 
-    print(f"Creating Docker network '{net_name}' with pair-ns-3 driver...")
+def ensure_macvlan_network(docker_client, net_name, parent, subnet):
     try:
-        network = client.networks.get(net_name)
+        network = docker_client.networks.get(net_name)
         network.remove()
         time.sleep(1)
     except docker.errors.NotFound:
         pass
 
-    network = client.networks.create(
+    return docker_client.networks.create(
         name=net_name,
-        driver="pair-ns-3:latest",
-        options={"if-prefix": "nk", "type": "netkit-l2"},
+        driver="macvlan",
+        options={"parent": parent},
         ipam=docker.types.IPAMConfig(
-            pool_configs=[
-                docker.types.IPAMPool(subnet="10.10.0.0/24", gateway="10.10.0.254")
-            ]
+            pool_configs=[docker.types.IPAMPool(subnet=subnet)]
         ),
+    )
+
+
+def check_real_world_connectivity(client, config):
+    rw_config = config["real_world"]
+    ssh_host = rw_config["remote_ssh_host"]
+    ok = True
+
+    def report(label, passed, detail=""):
+        nonlocal ok
+        status = "OK" if passed else "FAIL"
+        print(f"  [{status}] {label}" + (f" - {detail}" if detail else ""))
+        if not passed:
+            ok = False
+
+    print("--- Dry run: checking real-world link setup ---")
+
+    try:
+        client.ping()
+        report("local Docker daemon reachable", True)
+    except Exception as e:
+        report("local Docker daemon reachable", False, str(e))
+
+    local_nics = {name for _, name in socket.if_nameindex()}
+    report(
+        f"local macvlan parent '{rw_config['client_macvlan_parent']}' exists",
+        rw_config["client_macvlan_parent"] in local_nics,
+    )
+
+    ssh_opts = ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]
+    ssh_ok = subprocess.run(
+        ["ssh", *ssh_opts, ssh_host, "true"], capture_output=True, text=True
+    )
+    report(
+        f"SSH reachable ({ssh_host})",
+        ssh_ok.returncode == 0,
+        ssh_ok.stderr.strip(),
+    )
+
+    nic_result = subprocess.run(
+        [
+            "ssh",
+            *ssh_opts,
+            ssh_host,
+            "ip",
+            "link",
+            "show",
+            rw_config["server_macvlan_parent"],
+        ],
+        capture_output=True,
+        text=True,
+    )
+    report(
+        f"remote macvlan parent '{rw_config['server_macvlan_parent']}' exists",
+        nic_result.returncode == 0,
+        nic_result.stderr.strip(),
+    )
+
+    try:
+        remote_client = get_remote_docker_client(rw_config)
+        remote_client.ping()
+        report("remote Docker daemon reachable over SSH", True)
+    except Exception as e:
+        report("remote Docker daemon reachable over SSH", False, str(e))
+
+    print("--- Dry run: " + ("all checks passed" if ok else "checks FAILED") + " ---")
+    return ok
+
+
+def run_real_world(
+    client, remote_client, protocol, config, num_runs, timeout, output_dir
+):
+    print("\n--- Part 1: Running Real-World baseline ---")
+    p_config = config["protocols"][protocol]
+    rw_config = config["real_world"]
+    parser_fn = PARSERS[p_config["parser"]]
+
+    client_net_name = f"eval_client_net_{protocol}"
+    server_net_name = f"eval_server_net_{protocol}"
+
+    print(
+        f"Creating macvlan network '{client_net_name}' on {rw_config['client_macvlan_parent']}..."
+    )
+    client_network = ensure_macvlan_network(
+        client, client_net_name, rw_config["client_macvlan_parent"], rw_config["subnet"]
+    )
+    print(
+        f"Creating macvlan network '{server_net_name}' on remote {rw_config['server_macvlan_parent']}..."
+    )
+    server_network = ensure_macvlan_network(
+        remote_client,
+        server_net_name,
+        rw_config["server_macvlan_parent"],
+        rw_config["subnet"],
     )
 
     server_container = None
     client_container = None
 
     try:
-        ensure_image(client, p_config["server_image"])
+        ensure_image(remote_client, p_config["server_image"])
         ensure_image(client, p_config["client_image"])
 
         server_name = f"eval_server_{protocol}"
-        print(f"Starting server container '{server_name}'...")
+        print(f"Starting server container '{server_name}' on remote host...")
         try:
-            c = client.containers.get(server_name)
+            c = remote_client.containers.get(server_name)
             c.remove(force=True)
         except docker.errors.NotFound:
             pass
 
-        server_container = client.containers.create(
+        server_container = remote_client.containers.create(
             image=p_config["server_image"],
-            command=["tail", "-f", "/dev/null"],
+            entrypoint=["tail", "-f", "/dev/null"],
             name=server_name,
             detach=True,
             cap_add=["NET_ADMIN", "NET_RAW"],
@@ -141,7 +237,7 @@ def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
 
         client_container = client.containers.create(
             image=p_config["client_image"],
-            command=["tail", "-f", "/dev/null"],
+            entrypoint=["tail", "-f", "/dev/null"],
             name=client_name,
             detach=True,
             cap_add=["NET_ADMIN", "NET_RAW"],
@@ -150,6 +246,8 @@ def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
 
         # Server/client provisioning is independent - run concurrently instead
         # of paying apt-get's update+install latency twice, back to back.
+        # Containers start on the default bridge network (for apt-get's
+        # internet access); provisioning uses that.
         with ThreadPoolExecutor(max_workers=2) as pool:
             list(
                 pool.map(
@@ -161,9 +259,11 @@ def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
                 )
             )
 
-        print("Connecting containers to evaluation network...")
-        network.connect(server_container, ipv4_address="10.10.0.1")
-        network.connect(client_container, ipv4_address="10.10.0.2")
+        print("Connecting containers to their macvlan networks...")
+        remote_client.networks.get("bridge").disconnect(server_container)
+        client.networks.get("bridge").disconnect(client_container)
+        server_network.connect(server_container, ipv4_address=rw_config["server_ip"])
+        client_network.connect(client_container, ipv4_address=rw_config["client_ip"])
 
         metrics_per_run = []  # list of dicts, one per run
         raw_outputs = []
@@ -229,7 +329,7 @@ def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
         return metrics_per_run, raw_outputs
 
     finally:
-        print("Cleaning up real-world containers and network...")
+        print("Cleaning up real-world containers and networks...")
         if client_container:
             try:
                 client_container.remove(force=True)
@@ -240,9 +340,14 @@ def run_real_world(client, protocol, config, num_runs, timeout, output_dir):
                 server_container.remove(force=True)
             except Exception:
                 pass
-        if network:
+        if client_network:
             try:
-                network.remove()
+                client_network.remove()
+            except Exception:
+                pass
+        if server_network:
+            try:
+                server_network.remove()
             except Exception:
                 pass
 
@@ -410,11 +515,13 @@ def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run, global_cf
             # sim value. Fall back to reading the scoring table directly
             # in the metric's own unit instead of z-score multiples.
             z_score = abs(mean_sim - mean_real)
+            z_score_kind = "absolute"  # score isn't from std/overlap at all - see _plot_distribution_overlap
         else:
             pooled_std = float(np.sqrt((std_real**2 + std_sim**2) / 2))
             epsilon_floor = max(1e-9, 0.005 * abs(mean_real))
             denom = max(pooled_std, epsilon_floor)
             z_score = abs(mean_sim - mean_real) / denom
+            z_score_kind = "pooled_std"
 
         score = calculate_score(z_score, metric_cfg["scoring_table"])
 
@@ -426,11 +533,13 @@ def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run, global_cf
             "sim": sim_vals,
             "mean_real": mean_real,
             "std_real": std_real,
+            "z_score_kind": z_score_kind,
             "mean_sim": mean_sim,
             "std_sim": std_sim,
             "z_score": z_score,
             "score": score,
             "scoring_table": metric_cfg["scoring_table"],
+            "max_value": metric_cfg.get("max_value"),
         }
 
     available_scores = [m["score"] for m in results.values() if m["available"]]
@@ -438,12 +547,133 @@ def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run, global_cf
     return results, overall_score
 
 
+REAL_COLOR = "#3498db"
+SIM_COLOR = "#2ecc71"
+
+
+def _gaussian_pdf(x, mean, std):
+    std = max(std, 1e-9)
+    return np.exp(-0.5 * ((x - mean) / std) ** 2) / (std * np.sqrt(2 * np.pi))
+
+
+def _plot_spike_comparison(ax, m, max_value):
+    """For the deterministic-zero fallback (see score_metrics): the score
+    came from a bare |mean_sim - mean_real| against the scoring table, not
+    from any std/overlap. Drawing a fabricated bell curve here (std_real is
+    a hard 0 - there's nothing to widen it from) would show an "overlap %"
+    with no relationship to how the score was actually computed - exactly
+    the mismatch that made z=0.13/score=10/10 with "0.1% overlap" look
+    contradictory. Show the two exact values as spikes instead."""
+    mean_r, mean_s = m["mean_real"], m["mean_sim"]
+    span = max(abs(mean_s - mean_r), abs(mean_r), abs(mean_s), 1.0) * 0.3
+    lo, hi = mean_r - span, max(mean_r, mean_s) + span
+    if max_value:
+        lo, hi = max(lo, 0), min(hi, max_value)
+
+    for label, mean, color in [
+        ("Real-World", mean_r, REAL_COLOR),
+        ("ns-3 Sim", mean_s, SIM_COLOR),
+    ]:
+        ax.vlines(mean, 0, 1, color=color, linewidth=3, label=f"{label}: {mean:.3g}")
+        ax.plot(mean, 1, "o", color=color, markersize=8)
+
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(0, 1.15)
+    ax.set_yticks([])
+    ax.text(
+        0.5,
+        1.08,
+        f"|Δ| = {m['z_score']:.3g} {m['unit']} - real baseline is a deterministic\n"
+        "exact value, score reads this off the scoring table directly",
+        transform=ax.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=8.5,
+    )
+
+
+def _plot_distribution_overlap(ax, m, max_value):
+    """Overlapping N(mean, std) curves for real vs sim - visualizes the same
+    separation the z-score is computed from, instead of a bare boxplot.
+
+    x-range is always data-adaptive (mean +/- 4*std), never forced to the
+    metric's full max_value - a near-ceiling, near-zero-variance metric
+    (e.g. UDP throughput pinned at 10/10 Mbps) would otherwise collapse
+    into an unreadable sliver at the edge of a 0..max_value axis.
+    """
+    if m.get("z_score_kind") == "absolute":
+        _plot_spike_comparison(ax, m, max_value)
+        return
+
+    mean_r, mean_s = m["mean_real"], m["mean_sim"]
+    # Both stds are genuine here (z_score_kind == "pooled_std") - only floor
+    # them so a hard-zero side doesn't collapse the gaussian to a spike.
+    plot_floor = max(abs(mean_r), abs(mean_s), 1.0) * 0.02
+    std_r = max(m["std_real"], plot_floor)
+    std_s = max(m["std_sim"], plot_floor)
+
+    lo = min(mean_r - 4 * std_r, mean_s - 4 * std_s, 0)
+    hi = max(mean_r + 4 * std_r, mean_s + 4 * std_s)
+    if max_value:
+        lo, hi = max(lo, 0), min(hi, max_value)
+    x = np.linspace(lo, hi, 300)
+
+    y_r = _gaussian_pdf(x, mean_r, std_r)
+    y_s = _gaussian_pdf(x, mean_s, std_s)
+
+    # Where the tails visually cross is not the same as how much probability
+    # mass actually overlaps - shade the true overlap (min of the two
+    # curves) so that distinction is visible, not just implied by the
+    # z-score number in the title.
+    overlap = np.minimum(y_r, y_s)
+    overlap_area = np.trapezoid(overlap, x)
+    ax.fill_between(
+        x,
+        overlap,
+        color="#9b59b6",
+        alpha=0.5,
+        label=f"Overlap ≈ {overlap_area:.1%}",
+        zorder=3,
+    )
+
+    for label, mean, std, y, color in [
+        ("Real-World", mean_r, std_r, y_r, REAL_COLOR),
+        ("ns-3 Sim", mean_s, std_s, y_s, SIM_COLOR),
+    ]:
+        ax.plot(x, y, color=color, label=label, linewidth=2)
+        ax.fill_between(x, y, color=color, alpha=0.2)
+        ax.axvline(mean, color=color, linestyle=":", alpha=0.8)
+
+    ax.set_xlim(lo, hi)
+
+
+def _plot_boxplot(ax, m):
+    """Classic boxplot of raw per-run values, real vs sim side by side."""
+    bp = ax.boxplot(
+        [m["real"], m["sim"]],
+        tick_labels=["Real-World", "ns-3 Sim"],
+        patch_artist=True,
+        widths=0.5,
+    )
+    for patch, color in zip(bp["boxes"], [REAL_COLOR, SIM_COLOR]):
+        patch.set_facecolor(color)
+        patch.set_alpha(0.6)
+    ax.grid(axis="y", linestyle="--", alpha=0.6)
+
+
 def generate_report(
     protocol, p_config, metric_results, overall_score, output_dir, min_run_coverage=0.8
 ):
-    """Generates Markdown, JSON reports and plots the comparison graph, one panel per available metric."""
+    """Generates Markdown, JSON reports and one plot file per metric per kind
+    (bar, distribution, boxplot), laid out as:
+      {output_dir}/{protocol}_{timestamp}/report.md
+      {output_dir}/{protocol}_{timestamp}/data.json
+      {output_dir}/{protocol}_{timestamp}/metric/{name}_{bar,dist,box}.png
+    """
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    os.makedirs(output_dir, exist_ok=True)
+    run_dir = os.path.join(output_dir, f"{protocol}_{timestamp}")
+    metric_dir = os.path.join(run_dir, "metric")
+    os.makedirs(metric_dir, exist_ok=True)
 
     available = {k: v for k, v in metric_results.items() if v["available"]}
     unavailable = [k for k, v in metric_results.items() if not v["available"]]
@@ -455,54 +685,91 @@ def generate_report(
         "metrics": metric_results,
         "overall_score": overall_score,
     }
-    json_path = os.path.join(output_dir, f"eval_data_{protocol}_{timestamp}.json")
+    json_path = os.path.join(run_dir, "data.json")
     with open(json_path, "w") as f:
         json.dump(data, f, indent=4)
     print(f"Saved raw JSON data to: {json_path}")
 
-    # 2. Save Matplotlib Plot: one bar+box pair of columns per available metric
-    plot_path = os.path.join(output_dir, f"eval_plot_{protocol}_{timestamp}.png")
-    n = max(len(available), 1)
-    fig, axes = plt.subplots(2, n, figsize=(6 * n, 9), squeeze=False)
-    for idx, (name, m) in enumerate(available.items()):
-        ax1, ax2 = axes[0][idx], axes[1][idx]
-        ax1.bar(
+    # 2. Save one plot per metric per kind: bar, distribution, boxplot
+    plot_paths = {}  # name -> {"bar":..., "dist":..., "box":...}
+    for name, m in available.items():
+        max_value = m.get("max_value")
+        plot_paths[name] = {}
+
+        fig, ax1 = plt.subplots(figsize=(6, 5.5))
+        bars = ax1.bar(
             ["Real-World", "ns-3 Sim"],
             [m["mean_real"], m["mean_sim"]],
             yerr=[m["std_real"], m["std_sim"]],
             capsize=10,
-            color=["#3498db", "#2ecc71"],
+            color=[REAL_COLOR, SIM_COLOR],
             edgecolor="grey",
-            alpha=0.8,
+            alpha=0.85,
         )
-        ax1.set_ylabel(f"{name.capitalize()} ({m['unit']})")
-        ax1.set_title(f"Mean {name.capitalize()} (score {m['score']}/10)")
-        ax1.grid(axis="y", linestyle="--", alpha=0.7)
-
-        ax2.boxplot([m["real"], m["sim"]])
-        ax2.set_xticklabels(["Real-World", "ns-3 Sim"])
-        ax2.set_ylabel(f"{name.capitalize()} ({m['unit']})")
-        ax2.set_title("Distribution")
-        ax2.grid(linestyle="--", alpha=0.7)
-    if not available:
-        axes[0][0].text(
-            0.5, 0.5, "No metrics available to plot", ha="center", va="center"
+        for bar, mean, std in zip(
+            bars, [m["mean_real"], m["mean_sim"]], [m["std_real"], m["std_sim"]]
+        ):
+            ax1.annotate(
+                f"{mean:.3g} ± {std:.3g}",
+                xy=(bar.get_x() + bar.get_width() / 2, mean + std),
+                xytext=(0, 6),
+                textcoords="offset points",
+                ha="center",
+                fontsize=10,
+            )
+        ax1.set_ylabel(f"{name.capitalize()} ({m['unit']})", fontsize=11)
+        ax1.set_title(
+            f"Mean {name.capitalize()} (score {m['score']}/10)", fontsize=12, pad=14
         )
-        axes[1][0].axis("off")
+        ax1.grid(axis="y", linestyle="--", alpha=0.6)
+        # 18% headroom above the tallest bar+std+label so the annotation
+        # never collides with the title - was the top-row overlap bug.
+        tallest = max(
+            m["mean_real"] + m["std_real"], m["mean_sim"] + m["std_sim"], 1e-9
+        )
+        top = max_value if max_value else tallest
+        ax1.set_ylim(bottom=0, top=top * 1.18)
+        if max_value:
+            ax1.axhline(max_value, color="grey", linestyle="--", linewidth=1, alpha=0.6)
+        ax1.tick_params(labelsize=10)
+        plt.tight_layout()
+        bar_path = os.path.join(metric_dir, f"{name}_bar.png")
+        plt.savefig(bar_path)
+        plt.close(fig)
+        plot_paths[name]["bar"] = bar_path
 
-    fig.suptitle(
-        f"{p_config['name']} Evaluation: Real-World vs ns-3 Sim\n"
-        f"Overall Score: {overall_score:.2f}/10"
-        if overall_score is not None
-        else f"{p_config['name']} Evaluation: Real-World vs ns-3 Sim\nOverall Score: N/A"
-    )
-    plt.tight_layout()
-    plt.savefig(plot_path)
-    plt.close()
-    print(f"Saved comparison plot to: {plot_path}")
+        fig, ax2 = plt.subplots(figsize=(6, 5.5))
+        _plot_distribution_overlap(ax2, m, max_value)
+        ax2.set_xlabel(f"{name.capitalize()} ({m['unit']})", fontsize=11)
+        if m.get("z_score_kind") == "absolute":
+            ax2.set_title(f"Exact values (score {m['score']}/10)", fontsize=12)
+        else:
+            ax2.set_ylabel("Density", fontsize=11)
+            ax2.set_title(f"Distribution overlap (z = {m['z_score']:.2f})", fontsize=12)
+        ax2.grid(linestyle="--", alpha=0.6)
+        ax2.legend(fontsize=10)
+        ax2.tick_params(labelsize=10)
+        plt.tight_layout()
+        dist_path = os.path.join(metric_dir, f"{name}_dist.png")
+        plt.savefig(dist_path)
+        plt.close(fig)
+        plot_paths[name]["dist"] = dist_path
+
+        fig, ax3 = plt.subplots(figsize=(6, 5.5))
+        _plot_boxplot(ax3, m)
+        ax3.set_ylabel(f"{name.capitalize()} ({m['unit']})", fontsize=11)
+        ax3.set_title(f"Per-Run Spread: {name.capitalize()}", fontsize=12)
+        ax3.tick_params(labelsize=10)
+        plt.tight_layout()
+        box_path = os.path.join(metric_dir, f"{name}_box.png")
+        plt.savefig(box_path)
+        plt.close(fig)
+        plot_paths[name]["box"] = box_path
+
+    print(f"Saved {3 * len(available)} plots to: {metric_dir}")
 
     # 3. Save Markdown Report
-    md_path = os.path.join(output_dir, f"eval_report_{protocol}_{timestamp}.md")
+    md_path = os.path.join(run_dir, "report.md")
 
     metrics_table = ""
     for name, m in metric_results.items():
@@ -512,7 +779,9 @@ def generate_report(
                 f"{m['mean_sim']:.4f} ± {m['std_sim']:.4f} | {m['z_score']:.4f} | {m['score']}/10 | {m['coverage']} |\n"
             )
         else:
-            metrics_table += f"| {name} | {m['unit']} | N/A | N/A | N/A | N/A | {m['coverage']} |\n"
+            metrics_table += (
+                f"| {name} | {m['unit']} | N/A | N/A | N/A | N/A | {m['coverage']} |\n"
+            )
 
     overall_str = f"{overall_score:.2f}/10" if overall_score is not None else "N/A"
     min_cov_pct = min_run_coverage * 100
@@ -560,10 +829,15 @@ reported N/A rather than guessed.
             )
             md_content += f"| $\\le$ {threshold} | {scr}/10{mark} |\n"
 
-    md_content += f"""
-## Visualization
+    md_content += "\n## Visualization\n"
+    for name in available:
+        rel = {k: os.path.relpath(v, run_dir) for k, v in plot_paths[name].items()}
+        md_content += f"""
+### {name.capitalize()}
 
-![Comparison Plot]({os.path.basename(plot_path)})
+![Mean comparison]({rel["bar"]})
+![Distribution overlap]({rel["dist"]})
+![Per-run spread (boxplot)]({rel["box"]})
 """
     with open(md_path, "w") as f:
         f.write(md_content)
@@ -590,11 +864,15 @@ def main():
     parser.add_argument("--config", default="config.toml", help="Path to config.toml")
     parser.add_argument(
         "--protocol",
-        required=True,
         help="Protocol to evaluate (must be a key under [protocols] in config.toml)",
     )
     parser.add_argument("--runs", type=int, help="Override number of runs")
     parser.add_argument("--timeout", type=int, help="Override run timeout (seconds)")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="Verify the real-world link setup (Docker/SSH/NICs) and exit, without running an evaluation",
+    )
     args = parser.parse_args()
 
     if not os.path.exists(args.config):
@@ -603,6 +881,14 @@ def main():
 
     with open(args.config, "rb") as f:
         config = tomllib.load(f)
+
+    if args.check:
+        ok = check_real_world_connectivity(docker.from_env(), config)
+        sys.exit(0 if ok else 1)
+
+    if not args.protocol:
+        print("Error: --protocol is required (unless using --check).")
+        sys.exit(1)
 
     protocol = args.protocol
     if protocol not in config.get("protocols", {}):
@@ -623,9 +909,10 @@ def main():
     output_dir = config["global"].get("output_dir", "./eval_results")
 
     client = docker.from_env()
+    remote_client = get_remote_docker_client(config["real_world"])
 
     real_metrics, real_raw = run_real_world(
-        client, protocol, config, num_runs, timeout, output_dir
+        client, remote_client, protocol, config, num_runs, timeout, output_dir
     )
     sim_metrics, sim_raw = run_ns3_simulation(
         client, protocol, config, num_runs, timeout, output_dir
