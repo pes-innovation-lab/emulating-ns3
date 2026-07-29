@@ -403,6 +403,12 @@ def run_ns3_simulation(client, protocol, config, num_runs, timeout, output_dir):
         # so a short `timeout` can't SIGKILL a legitimate first-run build.
         ns3_timeout = max(timeout, 300)
 
+        # ns3_env in config.toml lets a protocol point the sim at the real
+        # testbed's actual known config (link rate/delay, TCP cc/MSS,
+        # iperf3 bitrate, arping probe count...) via env vars the .cc files
+        # read with getenv - never values back-solved from a measurement.
+        ns3_env = {str(k): str(v) for k, v in p_config.get("ns3_env", {}).items()}
+
         for run in range(1, num_runs + 1):
             print(f"Run {run}/{num_runs}...")
 
@@ -417,7 +423,7 @@ def run_ns3_simulation(client, protocol, config, num_runs, timeout, output_dir):
                         f"timeout -k 5 {ns3_timeout}s /app/ns-3/run_sim.sh {ns3_script}",
                     ],
                     user="root",
-                    environment={"NS_GLOBAL_VALUE": f"RngRun={run}"},
+                    environment={"NS_GLOBAL_VALUE": f"RngRun={run}", **ns3_env},
                 )
                 stdout_text = out.decode("utf-8", errors="ignore")
             except docker.errors.APIError as e:

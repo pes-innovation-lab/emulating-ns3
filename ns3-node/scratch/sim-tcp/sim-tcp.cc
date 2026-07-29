@@ -5,6 +5,8 @@
 #include "ns3/applications-module.h"
 #include "ns3/tcp-socket-base.h"
 
+#include "../sim-common/env-config.h"
+
 #include <cmath>
 #include <vector>
 
@@ -61,21 +63,47 @@ int main (int argc, char *argv[])
 
   Time::SetResolution (Time::NS);
 
+  // TCP stack config: matches ns-3 defaults unless config.toml's ns3_env
+  // sets these to the real testbed's actual sysctl/socket values (cc
+  // algorithm, MSS, buffers, initial cwnd).
+  std::string tcpCc = GetEnvStr ("NS3_TCP_CC", "");
+  if (!tcpCc.empty ())
+    {
+      Config::SetDefault ("ns3::TcpL4Protocol::SocketType", StringValue (tcpCc));
+    }
+  uint32_t mss = GetEnvUint ("NS3_TCP_SEGMENT_SIZE", 0);
+  if (mss)
+    {
+      Config::SetDefault ("ns3::TcpSocket::SegmentSize", UintegerValue (mss));
+    }
+  uint32_t initCwnd = GetEnvUint ("NS3_TCP_INIT_CWND", 0);
+  if (initCwnd)
+    {
+      Config::SetDefault ("ns3::TcpSocket::InitialCwnd", UintegerValue (initCwnd));
+    }
+  uint32_t sndBuf = GetEnvUint ("NS3_TCP_SND_BUF", 0);
+  if (sndBuf)
+    {
+      Config::SetDefault ("ns3::TcpSocket::SndBufSize", UintegerValue (sndBuf));
+    }
+  uint32_t rcvBuf = GetEnvUint ("NS3_TCP_RCV_BUF", 0);
+  if (rcvBuf)
+    {
+      Config::SetDefault ("ns3::TcpSocket::RcvBufSize", UintegerValue (rcvBuf));
+    }
+
+  double durationS = GetEnvDouble ("NS3_TCP_DURATION_S", 5.0);
+
   NodeContainer nodes;
   nodes.Create (2);
 
   PointToPointHelper pointToPoint;
-  pointToPoint.SetDeviceAttribute ("DataRate", StringValue ("1Gbps"));
-  // Delay sampled once per run (seeded via RngRun) so std_sim isn't always
-  // 0. Applied via MicroSeconds, not MilliSeconds: MilliSeconds(double)
-  // truncates to whole ms, silently zeroing any sub-1ms value.
-  // Range matches this testbed's real veth link (~4-6us one-way, from
-  // measured ARP RTT), not a generic "realistic wire" value - z-score
-  // only means something if sim and real are modeling the same link.
-  Ptr<UniformRandomVariable> delayRv = CreateObject<UniformRandomVariable> ();
-  delayRv->SetAttribute ("Min", DoubleValue (2.0));
-  delayRv->SetAttribute ("Max", DoubleValue (8.0));
-  pointToPoint.SetChannelAttribute ("Delay", TimeValue (MicroSeconds (delayRv->GetValue ())));
+  // Physical link: 1Gbps NIC-to-NIC, direct macvlan on a short Ethernet run
+  // by default - override via NS3_DATA_RATE/NS3_LINK_DELAY_US in config.toml
+  // if the real link's actual rating/propagation delay is known.
+  pointToPoint.SetDeviceAttribute ("DataRate", StringValue (GetEnvStr ("NS3_DATA_RATE", "1Gbps")));
+  pointToPoint.SetChannelAttribute (
+      "Delay", TimeValue (MicroSeconds (GetEnvDouble ("NS3_LINK_DELAY_US", 10.0))));
 
   NetDeviceContainer devices;
   devices = pointToPoint.Install (nodes);
@@ -94,7 +122,7 @@ int main (int argc, char *argv[])
   PacketSinkHelper packetSinkHelper ("ns3::TcpSocketFactory", sinkLocalAddress);
   ApplicationContainer sinkApp = packetSinkHelper.Install (nodes.Get (0));
   sinkApp.Start (Seconds (0.0));
-  sinkApp.Stop (Seconds (6.0));
+  sinkApp.Stop (Seconds (durationS + 1.0));
 
   // Client: BulkSend on Node 1 (10.10.0.2)
   // Send to server (10.10.0.1)
@@ -102,21 +130,20 @@ int main (int argc, char *argv[])
   BulkSendHelper sourceHelper ("ns3::TcpSocketFactory", Address ());
   sourceHelper.SetAttribute ("Remote", remoteAddress);
   sourceHelper.SetAttribute ("MaxBytes", UintegerValue (0)); // Unlimited
-  
+
   ApplicationContainer sourceApp = sourceHelper.Install (nodes.Get (1));
   sourceApp.Start (Seconds (0.5));
-  sourceApp.Stop (Seconds (5.5));
+  sourceApp.Stop (Seconds (0.5 + durationS));
 
   Simulator::Schedule (Seconds (0.51), &ConnectTcpTraces, nodes.Get (1)->GetId ());
 
-  Simulator::Stop (Seconds (6.0));
+  Simulator::Stop (Seconds (durationS + 1.0));
   Simulator::Run ();
 
   // Calculate throughput
   Ptr<PacketSink> sink = DynamicCast<PacketSink> (sinkApp.Get (0));
   uint64_t totalBytesReceived = sink->GetTotalRx ();
-  double duration = 5.0; // Client ran for 5.5 - 0.5 = 5 seconds
-  double throughputMbps = (totalBytesReceived * 8.0) / (duration * 1e6);
+  double throughputMbps = (totalBytesReceived * 8.0) / (durationS * 1e6);
 
   double latencyMs = 0.0;
   double jitterMs = 0.0;

@@ -4,6 +4,8 @@
 #include "ns3/internet-module.h"
 #include "ns3/network-module.h"
 
+#include "../sim-common/env-config.h"
+
 using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE("SimDhcpEvaluation");
@@ -31,17 +33,12 @@ int main(int argc, char *argv[]) {
   nodes.Create(2); // Node 0: Server, Node 1: Client
 
   CsmaHelper csma;
-  csma.SetChannelAttribute("DataRate", StringValue("1Gbps"));
-  // Delay sampled once per run (seeded via RngRun) so std_sim isn't always
-  // 0. Applied via MicroSeconds, not MilliSeconds: MilliSeconds(double)
-  // truncates to whole ms, silently zeroing any sub-1ms value.
-  // Range matches this testbed's real veth link (~4-6us one-way, from
-  // measured ARP RTT), not a generic "realistic wire" value - z-score
-  // only means something if sim and real are modeling the same link.
-  Ptr<UniformRandomVariable> delayRv = CreateObject<UniformRandomVariable>();
-  delayRv->SetAttribute("Min", DoubleValue(2.0));
-  delayRv->SetAttribute("Max", DoubleValue(8.0));
-  csma.SetChannelAttribute("Delay", TimeValue(MicroSeconds(delayRv->GetValue())));
+  // Physical link: 1Gbps NIC-to-NIC, direct macvlan on a short Ethernet run
+  // by default - override via NS3_DATA_RATE/NS3_LINK_DELAY_US in
+  // config.toml if the real link's actual rating/propagation delay is
+  // known.
+  csma.SetChannelAttribute("DataRate", StringValue(GetEnvStr("NS3_DATA_RATE", "1Gbps")));
+  csma.SetChannelAttribute("Delay", TimeValue(MicroSeconds(GetEnvDouble("NS3_LINK_DELAY_US", 10.0))));
 
   NetDeviceContainer devices;
   devices = csma.Install(nodes);
@@ -59,7 +56,8 @@ int main(int argc, char *argv[]) {
   // Default "Collect" (offer-collection wait before REQUEST) is 5s. Single
   // DHCP server here, nothing to wait to collect, so keep this minimal
   // instead of letting it dominate measured latency.
-  dhcpHelper.SetClientAttribute("Collect", TimeValue(MicroSeconds(100)));
+  dhcpHelper.SetClientAttribute(
+      "Collect", TimeValue(MicroSeconds(GetEnvDouble("NS3_DHCP_COLLECT_US", 100.0))));
   // Server parameters:
   // - NetDevice on server
   // - Server IP address

@@ -38,11 +38,15 @@ def parse_iperf3(stdout_text):
                     if "mean_rtt" in sender:
                         result["latency"] = sender["mean_rtt"] / 1000.0  # usec -> ms
                     if "max_rtt" in sender and "min_rtt" in sender:
-                        result["jitter"] = (sender["max_rtt"] - sender["min_rtt"]) / 1000.0
+                        result["jitter"] = (
+                            sender["max_rtt"] - sender["min_rtt"]
+                        ) / 1000.0
                     if "retransmits" in sender:
                         result["retransmits"] = float(sender["retransmits"])
                     if "max_snd_cwnd" in sender:
-                        result["snd_cwnd"] = sender["max_snd_cwnd"] / 1024.0  # bytes -> KB
+                        result["snd_cwnd"] = (
+                            sender["max_snd_cwnd"] / 1024.0
+                        )  # bytes -> KB
             if "sum" in end and "bits_per_second" in end["sum"]:
                 result["throughput"] = end["sum"].get("bits_per_second", 0.0) / 1e6
                 if "jitter_ms" in end["sum"]:
@@ -267,6 +271,10 @@ if __name__ == "__main__":
     assert abs(fallback["jitter"] - 0.1) < 1e-9
     assert parse_ns3_output("NS3_METRIC throughput: 94.5 Mbps") == {"throughput": 94.5}
     assert parse_ns3_output("no metric here") == {}
-    assert parse_ns3_output("NS3_METRIC jitter: 9.09495e-13 ms") == {"jitter": 9.09495e-13}
-    assert parse_ns3_output("NS3_METRIC jitter: 4.54747e-14 ms") == {"jitter": 4.54747e-14}
+    assert parse_ns3_output("NS3_METRIC jitter: 9.09495e-13 ms") == {
+        "jitter": 9.09495e-13
+    }
+    assert parse_ns3_output("NS3_METRIC jitter: 4.54747e-14 ms") == {
+        "jitter": 4.54747e-14
+    }
     print("parsers.py self-check OK")

@@ -32,6 +32,21 @@ ns3_script = "sim-tcp"
 parser = "iperf3"
 cleanup_cmds = ["kill -9 $(pidof iperf3) 2>/dev/null || true"]
 
+# Passed as env vars into the ns-3 container (sim-tcp.cc reads them via
+# getenv, see ns3-node/scratch/sim-common/env-config.h). Defaults below
+# match the .cc's built-in behavior - fill in the real testbed's actual
+# known config (e.g. `sysctl net.ipv4.tcp_congestion_control`, real MSS/
+# buffer sizes) to make the sim faithful to the real setup.
+[protocols.tcp.ns3_env]
+NS3_DATA_RATE = "1Gbps"       # physical link rate; set to the real link's actual rating
+NS3_LINK_DELAY_US = 10        # physical propagation delay; set to the real cable's actual value
+NS3_TCP_DURATION_S = 5        # matches client_cmd's -t 5
+# NS3_TCP_CC = "ns3::TcpCubic"        # uncomment + set to match real host's tcp_congestion_control
+# NS3_TCP_SEGMENT_SIZE = 1448         # uncomment + set to match real host's MSS
+# NS3_TCP_INIT_CWND = 10              # uncomment + set to match real host's initcwnd
+# NS3_TCP_SND_BUF = 16777216          # uncomment + set to match real host's net.core.wmem_max
+# NS3_TCP_RCV_BUF = 16777216          # uncomment + set to match real host's net.core.rmem_max
+
 [[protocols.tcp.metrics]]
 name = "throughput"
 unit = "Mbps"
@@ -78,6 +93,14 @@ ns3_script = "sim-udp"
 parser = "iperf3"
 cleanup_cmds = ["kill -9 $(pidof iperf3) 2>/dev/null || true"]
 
+# Defaults here mirror client_cmd's own -b/-t/packet size.
+[protocols.udp.ns3_env]
+NS3_DATA_RATE = "1Gbps"        # physical link rate; set to the real link's actual rating
+NS3_LINK_DELAY_US = 10         # physical propagation delay; set to the real cable's actual value
+NS3_UDP_BITRATE_MBPS = 10      # matches client_cmd's -b 10M
+NS3_UDP_PACKET_SIZE = 1472     # matches iperf3's default UDP payload (1500 MTU - 20 IP - 8 UDP)
+NS3_UDP_DURATION_S = 5         # matches client_cmd's -t 5
+
 [[protocols.udp.metrics]]
 name = "throughput"
 unit = "Mbps"
@@ -118,6 +141,11 @@ ns3_script = "sim-dhcp"
 parser = "perfdhcp"
 cleanup_cmds = ["pkill -9 dnsmasq", "pkill -9 perfdhcp"]
 
+[protocols.dhcp.ns3_env]
+NS3_DATA_RATE = "1Gbps"        # physical link rate; set to the real link's actual rating
+NS3_LINK_DELAY_US = 10         # physical propagation delay; set to the real cable's actual value
+NS3_DHCP_COLLECT_US = 100      # offer-collection wait before REQUEST; ns-3 default is 5s, set here to 100us since there's a single DHCP server
+
 [[protocols.dhcp.metrics]]
 name = "latency"
 unit = "ms"
@@ -144,6 +172,12 @@ server_cmd = "tail -f /dev/null"
 ns3_script = "sim-arp"
 parser = "arping"
 cleanup_cmds = ["pkill -9 arping"]
+
+# NS3_ARP_PROBE_COUNT matches client_cmd's -c 5.
+[protocols.arp.ns3_env]
+NS3_DATA_RATE = "1Gbps"        # physical link rate; set to the real link's actual rating
+NS3_LINK_DELAY_US = 10         # physical propagation delay; set to the real cable's actual value
+NS3_ARP_PROBE_COUNT = 5        # matches client_cmd's -c 5
 
 [[protocols.arp.metrics]]
 name = "latency"

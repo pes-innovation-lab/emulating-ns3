@@ -3,7 +3,8 @@
 #include "ns3/internet-module.h"
 #include "ns3/point-to-point-module.h"
 #include "ns3/applications-module.h"
-#include "ns3/error-model.h"
+
+#include "../sim-common/env-config.h"
 
 #include <cmath>
 #include <vector>
@@ -27,8 +28,7 @@ void
 RxCallback (Ptr<const Packet> packet, const Address &from)
 {
   g_packetsReceived++;
-  // Sub-ms precision - GetMilliSeconds() truncates and would drown the
-  // ~1.18ms true spacing in rounding noise.
+  // Sub-ms precision - GetMilliSeconds() truncates
   double nowMs = Simulator::Now ().GetSeconds () * 1000.0;
   if (g_lastRxTimeMs >= 0.0)
     {
@@ -44,12 +44,18 @@ int main (int argc, char *argv[])
 
   Time::SetResolution (Time::NS);
 
+  double durationS = GetEnvDouble ("NS3_UDP_DURATION_S", 5.0);
+
   NodeContainer nodes;
   nodes.Create (2);
 
   PointToPointHelper pointToPoint;
-  pointToPoint.SetDeviceAttribute ("DataRate", StringValue ("1Gbps"));
-  pointToPoint.SetChannelAttribute ("Delay", StringValue ("0.1ms"));
+  // Physical link: 1Gbps NIC-to-NIC, direct macvlan on a short Ethernet run
+  // by default - override via NS3_DATA_RATE/NS3_LINK_DELAY_US in config.toml
+  // if the real link's actual rating/propagation delay is known.
+  pointToPoint.SetDeviceAttribute ("DataRate", StringValue (GetEnvStr ("NS3_DATA_RATE", "1Gbps")));
+  pointToPoint.SetChannelAttribute (
+      "Delay", TimeValue (MicroSeconds (GetEnvDouble ("NS3_LINK_DELAY_US", 10.0))));
 
   NetDeviceContainer devices;
   devices = pointToPoint.Install (nodes);
@@ -62,44 +68,40 @@ int main (int argc, char *argv[])
 
   Ipv4InterfaceContainer interfaces = address.Assign (devices);
 
-  // Rate kept low - real-world UDP on this localhost link runs ~0% loss,
-  // and z-score grows with sqrt(packet_count) for any fixed rate, so a
-  // higher rate would tank the score regardless of sim correctness.
-  Ptr<RateErrorModel> errorModel = CreateObject<RateErrorModel> ();
-  errorModel->SetAttribute ("ErrorRate", DoubleValue (0.001));
-  errorModel->SetUnit (RateErrorModel::ERROR_UNIT_PACKET);
-  devices.Get (0)->SetAttribute ("ReceiveErrorModel", PointerValue (errorModel));
-
   // Server: Packet Sink on Node 0 (10.10.0.1)
   uint16_t port = 9;
   Address sinkLocalAddress (InetSocketAddress (Ipv4Address::GetAny (), port));
   PacketSinkHelper packetSinkHelper ("ns3::UdpSocketFactory", sinkLocalAddress);
   ApplicationContainer sinkApp = packetSinkHelper.Install (nodes.Get (0));
   sinkApp.Start (Seconds (0.0));
-  sinkApp.Stop (Seconds (6.0));
+  sinkApp.Stop (Seconds (durationS + 1.0));
 
-  // Client: OnOffApplication on Node 1 (10.10.0.2) sending to Node 0 (10.10.0.1)
+  // Client: OnOffApplication on Node 1 (10.10.0.2) sending to Node 0 (10.10.0.1).
+  // Bitrate/packet size default to matching this bench's own iperf3 -b/-u
+  // invocation (config.toml's client_cmd) - override via NS3_UDP_BITRATE_MBPS/
+  // NS3_UDP_PACKET_SIZE if the real command line differs.
+  std::string udpDataRate = GetEnvStr ("NS3_UDP_BITRATE_MBPS", "10") + "Mbps";
+  uint32_t udpPacketSize = (uint32_t) GetEnvDouble ("NS3_UDP_PACKET_SIZE", 1472);
   OnOffHelper onOffHelper ("ns3::UdpSocketFactory", InetSocketAddress (interfaces.GetAddress (0), port));
   onOffHelper.SetAttribute ("OnTime", StringValue ("ns3::ConstantRandomVariable[Constant=1]"));
   onOffHelper.SetAttribute ("OffTime", StringValue ("ns3::ConstantRandomVariable[Constant=0]"));
-  onOffHelper.SetAttribute ("DataRate", StringValue ("10Mbps"));
-  onOffHelper.SetAttribute ("PacketSize", UintegerValue (1472)); // 1500 - 20 (IP) - 8 (UDP)
+  onOffHelper.SetAttribute ("DataRate", StringValue (udpDataRate));
+  onOffHelper.SetAttribute ("PacketSize", UintegerValue (udpPacketSize));
 
   ApplicationContainer clientApps = onOffHelper.Install (nodes.Get (1));
   clientApps.Start (Seconds (0.5));
-  clientApps.Stop (Seconds (5.5));
+  clientApps.Stop (Seconds (0.5 + durationS));
 
   Ptr<PacketSink> sink = DynamicCast<PacketSink> (sinkApp.Get (0));
   sink->TraceConnectWithoutContext ("Rx", MakeCallback (&RxCallback));
   clientApps.Get (0)->TraceConnectWithoutContext ("Tx", MakeCallback (&TxCallback));
 
-  Simulator::Stop (Seconds (6.0));
+  Simulator::Stop (Seconds (durationS + 1.0));
   Simulator::Run ();
 
   // Calculate throughput
   uint64_t totalBytesReceived = sink->GetTotalRx ();
-  double duration = 5.0; // Client ran for 5 seconds
-  double throughputMbps = (totalBytesReceived * 8.0) / (duration * 1e6);
+  double throughputMbps = (totalBytesReceived * 8.0) / (durationS * 1e6);
 
   double lossPct = g_packetsSent > 0
     ? (100.0 * (double) (g_packetsSent - g_packetsReceived) / (double) g_packetsSent)
