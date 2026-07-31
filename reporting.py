@@ -56,12 +56,15 @@ def generate_report(
             ("normal_distribution", plot_normal_distribution, True),
             ("strip", plot_strip, False),
         ]:
-            path = os.path.join(subdir, f"{kind}.png")
+            # Relative to run_dir: report.md lives inside it, so image
+            # refs must resolve from there.
+            rel = os.path.join("metric", name, f"{kind}.png")
+            path = os.path.join(run_dir, rel)
             if needs_det:
                 fn(path, m, deterministic)
             else:
                 fn(path, m)
-            plot_paths[name][kind] = path
+            plot_paths[name][kind] = rel
 
     overview_path = os.path.join(run_dir, "overview.png")
     plot_overview(overview_path, p_config["name"], metric_results)
