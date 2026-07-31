@@ -19,9 +19,9 @@ min_run_coverage = 0.8
 ns3_build_profile = "optimized"
 
 # Scoring: x = |mu_sim - mu_real| / max(sigma_real, epsilon) with
-# epsilon = max(tolerance_abs, tolerance_ratio * |mu_real|) keeping the
-# denominator well-defined for deterministic/near-deterministic real sides.
-# tolerance_ratio >= 0.05 makes scores less meaningful and triggers a warning.
+# epsilon = max(tolerance_abs, tolerance_ratio * |mu_real|) - both may be
+# overridden per metric (a hard-zero baseline like 0% loss needs an
+# absolute tolerance_abs). tolerance_ratio >= 0.05 triggers a warning.
 tolerance_ratio = 0.005
 tolerance_abs = 1e-9
 
@@ -125,6 +125,7 @@ unit = "ms"
 name = "loss"
 unit = "%"
 max_value = 100              # loss is a percentage
+tolerance_abs = 0.5          # absolute resolution: real baseline is a hard 0.0% loss
 
 [protocols.dhcp]
 name = "DHCP"

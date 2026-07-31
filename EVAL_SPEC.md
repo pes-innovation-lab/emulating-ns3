@@ -32,6 +32,11 @@ when the real side measures deterministic or near-deterministic:
 x = |μ_sim − μ_real| / max(σ_real, ε)
 ```
 
+The ε floor degenerates on hard-zero baselines (0.5% of 0 is 0), so a
+metric whose unit is prone to that (e.g. loss) declares an absolute
+`tolerance_abs` in its own units - both tolerances may be overridden per
+metric in `config.toml`.
+
 x is read against a configurable scoring table (default
 `[1.0, 10], [1.28, 9], [1.645, 8], [1.96, 7], [2.33, 6], [2.576, 5],
 [3.0, 4], [3.29, 3], [3.72, 2], [4.27, 1]`) to produce the score out of 10.

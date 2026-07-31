@@ -41,11 +41,15 @@ HIGH_TOLERANCE_RATIO = 0.05
 MIN_REAL_RUNS = 10
 
 
-def tolerance_floor(mean_real, global_cfg=None):
-    """epsilon = max(tolerance_abs, tolerance_ratio * |mean_real|)."""
+def tolerance_floor(mean_real, global_cfg=None, metric_cfg=None):
+    """epsilon = max(tolerance_abs, tolerance_ratio * |mean_real|), either
+    tolerance overridable per metric (config.toml)."""
     global_cfg = global_cfg or {}
-    ratio = global_cfg.get("tolerance_ratio", DEFAULT_TOLERANCE_RATIO)
-    abs_floor = global_cfg.get("tolerance_abs", DEFAULT_TOLERANCE_ABS)
+    metric_cfg = metric_cfg or {}
+    ratio = metric_cfg.get("tolerance_ratio", global_cfg.get(
+        "tolerance_ratio", DEFAULT_TOLERANCE_RATIO))
+    abs_floor = metric_cfg.get("tolerance_abs", global_cfg.get(
+        "tolerance_abs", DEFAULT_TOLERANCE_ABS))
     return max(abs_floor, ratio * abs(mean_real))
 
 
@@ -129,7 +133,7 @@ def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run, global_cf
         # sigma_real = 0 needs no special case - the floor keeps the
         # denominator positive, so the score stays graded ("within real
         # resolution") instead of a binary exact-match pass/fail.
-        epsilon = tolerance_floor(mean_real, global_cfg)
+        epsilon = tolerance_floor(mean_real, global_cfg, metric_cfg)
         x = abs(mean_sim - mean_real) / max(std_real, epsilon)
         scoring_table = resolve_scoring_table(metric_cfg, global_cfg)
         score = calculate_score(x, scoring_table)

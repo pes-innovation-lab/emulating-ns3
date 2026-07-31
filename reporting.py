@@ -118,6 +118,7 @@ reported N/A rather than guessed.
   denominator well-defined when the real side measures deterministic
   (sigma_real = 0) or near-deterministic; a deterministic real baseline
   scores graded (distance in epsilon units), not as a binary pass/fail.
+  Both tolerances may be overridden per metric in `config.toml`.
 - **Score:** the metric's scoring table read at x (first band where
   x <= threshold).
 - **Overall score:** mean of per-metric scores.
