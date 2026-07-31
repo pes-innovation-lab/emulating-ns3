@@ -90,7 +90,16 @@ def get_remote_docker_client(rw_config):
 def ensure_macvlan_network(docker_client, net_name, parent, subnet):
     try:
         network = docker_client.networks.get(net_name)
-        network.remove()
+        try:
+            network.remove()
+        except docker.errors.APIError:
+            # Leftover containers still hold the network; force-disconnect, then retry.
+            for cid in network.containers:
+                try:
+                    network.disconnect(cid, force=True)
+                except Exception:
+                    pass
+            network.remove()
         time.sleep(1)
     except docker.errors.NotFound:
         pass
@@ -103,6 +112,35 @@ def ensure_macvlan_network(docker_client, net_name, parent, subnet):
             pool_configs=[docker.types.IPAMPool(subnet=subnet)]
         ),
     )
+
+
+def cleanup_stale_resources(docker_client, label):
+    """Removes eval containers/networks left by a killed run, on either
+    daemon. Best-effort: failures logged, not fatal."""
+    try:
+        for c in docker_client.containers.list(all=True):
+            names = c.attrs.get("Names") or []
+            try:
+                tags = c.image.tags or []
+            except Exception:
+                tags = []
+            is_eval = any(n.startswith("/eval_") for n in names)
+            is_ns3 = any("ns3-eval-sim" in t for t in tags)
+            if is_eval or is_ns3:
+                try:
+                    c.remove(force=True)
+                    print(f"  [stale] removed container {names} on {label}")
+                except Exception as e:
+                    print(f"  [stale] could not remove container {names} on {label}: {e}")
+        for n in docker_client.networks.list():
+            if (n.name or "").startswith("eval_"):
+                try:
+                    n.remove()
+                    print(f"  [stale] removed network {n.name} on {label}")
+                except Exception as e:
+                    print(f"  [stale] could not remove network {n.name} on {label}: {e}")
+    except Exception as e:
+        print(f"  [stale] cleanup on {label} failed: {e}")
 
 
 def check_real_world_connectivity(client, config):
@@ -182,37 +220,39 @@ def run_real_world(client, remote_client, protocol, config, num_runs, timeout):
     client_net_name = f"eval_client_net_{protocol}"
     server_net_name = f"eval_server_net_{protocol}"
 
-    print(
-        f"Creating macvlan network '{client_net_name}' on {rw_config['client_macvlan_parent']}..."
-    )
-    client_network = ensure_macvlan_network(
-        client, client_net_name, rw_config["client_macvlan_parent"], rw_config["subnet"]
-    )
-    print(
-        f"Creating macvlan network '{server_net_name}' on remote {rw_config['server_macvlan_parent']}..."
-    )
-    server_network = ensure_macvlan_network(
-        remote_client,
-        server_net_name,
-        rw_config["server_macvlan_parent"],
-        rw_config["subnet"],
-    )
+    print("Cleaning up stale resources from previous runs...")
+    cleanup_stale_resources(client, "local")
+    cleanup_stale_resources(remote_client, "remote")
 
+    client_network = None
+    server_network = None
     server_container = None
     client_container = None
 
     try:
+        # Inside the try so a failure here still reaches the finally
+        # (which removes whichever network got created).
+        print(
+            f"Creating macvlan network '{client_net_name}' on {rw_config['client_macvlan_parent']}..."
+        )
+        client_network = ensure_macvlan_network(
+            client, client_net_name, rw_config["client_macvlan_parent"], rw_config["subnet"]
+        )
+        print(
+            f"Creating macvlan network '{server_net_name}' on remote {rw_config['server_macvlan_parent']}..."
+        )
+        server_network = ensure_macvlan_network(
+            remote_client,
+            server_net_name,
+            rw_config["server_macvlan_parent"],
+            rw_config["subnet"],
+        )
+
         ensure_image(remote_client, p_config["server_image"])
         ensure_image(client, p_config["client_image"])
 
         server_name = f"eval_server_{protocol}"
         print(f"Starting server container '{server_name}' on remote host...")
-        try:
-            c = remote_client.containers.get(server_name)
-            c.remove(force=True)
-        except docker.errors.NotFound:
-            pass
-
         server_container = remote_client.containers.create(
             image=p_config["server_image"],
             entrypoint=["tail", "-f", "/dev/null"],
@@ -224,12 +264,6 @@ def run_real_world(client, remote_client, protocol, config, num_runs, timeout):
 
         client_name = f"eval_client_{protocol}"
         print(f"Starting client container '{client_name}'...")
-        try:
-            c = client.containers.get(client_name)
-            c.remove(force=True)
-        except docker.errors.NotFound:
-            pass
-
         client_container = client.containers.create(
             image=p_config["client_image"],
             entrypoint=["tail", "-f", "/dev/null"],
@@ -355,6 +389,9 @@ def run_ns3_simulation(client, protocol, config, timeout):
 
     image_tag = "ns3-eval-sim:latest"
     build_prof = global_cfg.get("ns3_build_profile", "optimized")
+
+    # ns-3 containers get random names, so the sweep keys on the image tag.
+    cleanup_stale_resources(client, "local (ns-3)")
 
     try:
         client.images.get(image_tag)
@@ -504,23 +541,32 @@ def main():
     client = docker.from_env()
     remote_client = get_remote_docker_client(config["real_world"])
 
-    real_metrics = run_real_world(
-        client, remote_client, protocol, config, num_runs, timeout
-    )
-    sim_metrics = run_ns3_simulation(client, protocol, config, timeout)
+    try:
+        real_metrics = run_real_world(
+            client, remote_client, protocol, config, num_runs, timeout
+        )
+        sim_metrics = run_ns3_simulation(client, protocol, config, timeout)
 
-    metric_results, overall_score = score_metrics(
-        p_config, real_metrics, sim_metrics, config["global"]
-    )
-    generate_report(
-        protocol,
-        p_config,
-        metric_results,
-        overall_score,
-        output_dir,
-        config["global"].get("min_run_coverage", 0.8),
-        deterministic,
-    )
+        metric_results, overall_score = score_metrics(
+            p_config, real_metrics, sim_metrics, config["global"]
+        )
+        generate_report(
+            protocol,
+            p_config,
+            metric_results,
+            overall_score,
+            output_dir,
+            config["global"].get("min_run_coverage", 0.8),
+            deterministic,
+        )
+    except KeyboardInterrupt:
+        # The part finallys already ran; sweep both daemons to catch
+        # resources created mid-call (before the handle was assigned).
+        print("\nInterrupted by user (Ctrl-C) - removing stale resources...")
+        cleanup_stale_resources(client, "local")
+        cleanup_stale_resources(remote_client, "remote")
+        print("Cleanup done.")
+        sys.exit(130)
 
 
 if __name__ == "__main__":
