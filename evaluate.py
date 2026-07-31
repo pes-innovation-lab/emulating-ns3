@@ -1,33 +1,27 @@
 #!/usr/bin/env python3
 """
 Orchestration script for the Protocol Evaluation Bench.
-Spins up real-world containers, runs ns-3 simulations, parses metrics,
-calculates standard deviation and z-score differences, and outputs a scoring report.
+Spins up real-world containers, runs ns-3 simulations, then scores and
+reports (see scoring.py / plotting.py / reporting.py).
 
 Protocol behaviour (packages, commands, cleanup, parser, scored metrics) all
 comes from config.toml - adding a protocol needs no changes here.
 """
 
 import argparse
-import datetime
 import os
 import socket
 import subprocess
 import sys
 import time
-
-import matplotlib
-import numpy as np
-
-matplotlib.use("Agg")  # Non-interactive backend
-import json
 import tomllib
 from concurrent.futures import ThreadPoolExecutor
 
 import docker
-import matplotlib.pyplot as plt
 
 from parsers import PARSERS, parse_ns3_output
+from reporting import generate_report
+from scoring import score_metrics
 
 
 def run_pre_install_cmds(container, cmds, label):
@@ -182,9 +176,9 @@ def check_real_world_connectivity(client, config):
     return ok
 
 
-def run_real_world(
-    client, remote_client, protocol, config, num_runs, timeout, output_dir
-):
+def run_real_world(client, remote_client, protocol, config, num_runs, timeout):
+    """Runs the real-world baseline: two containers on a physical link,
+    repeating the protocol's client command `num_runs` times."""
     print("\n--- Part 1: Running Real-World baseline ---")
     p_config = config["protocols"][protocol]
     rw_config = config["real_world"]
@@ -272,7 +266,6 @@ def run_real_world(
         client_network.connect(client_container, ipv4_address=rw_config["client_ip"])
 
         metrics_per_run = []  # list of dicts, one per run
-        raw_outputs = []
 
         for run in range(1, num_runs + 1):
             print(f"Run {run}/{num_runs}...")
@@ -326,13 +319,11 @@ def run_real_world(
                 # a metric's regex and pollute the mean with a bogus value.
                 stdout_text = ""
 
-            raw_outputs.append(stdout_text)
-
             res = parser_fn(stdout_text) if code == 0 else {}
             print(f"  Parsed metrics: {res} (Code: {code}, Duration: {duration:.2f}s)")
             metrics_per_run.append(res)
 
-        return metrics_per_run, raw_outputs
+        return metrics_per_run
 
     finally:
         print("Cleaning up real-world containers and networks...")
@@ -358,20 +349,22 @@ def run_real_world(
                 pass
 
 
-def run_ns3_simulation(client, protocol, config, timeout, output_dir):
+def run_ns3_simulation(client, protocol, config, timeout):
     """Runs the ns-3 simulation baseline.
 
-    The sims are deterministic (no random loss/jitter injected), so a
-    single run fully captures the output - repeated runs would be
-    redundant computation.
+    A deterministic sim (the default) has no random elements, so a single
+    run is the complete answer. A protocol with `deterministic = false`
+    runs `number_of_runs` times and is scored on its mean.
     """
     print("\n--- Part 2: Running ns-3 Simulation baseline ---")
     p_config = config["protocols"][protocol]
+    global_cfg = config["global"]
     ns3_script = p_config["ns3_script"]
+    deterministic = p_config.get("deterministic", global_cfg.get("deterministic", True))
+    num_runs = global_cfg.get("number_of_runs", 5)
 
     image_tag = "ns3-eval-sim:latest"
-
-    build_prof = config["global"].get("ns3_build_profile", "optimized")
+    build_prof = global_cfg.get("ns3_build_profile", "optimized")
 
     try:
         client.images.get(image_tag)
@@ -382,11 +375,15 @@ def run_ns3_simulation(client, protocol, config, timeout, output_dir):
         )
 
     metrics_per_run = []
-    raw_outputs = []
 
     scratch_dir = os.path.abspath("./ns3-node/scratch")
     run_sim_script = os.path.abspath("./ns3-node/run_sim.sh")
     narrow_script = os.path.abspath("./ns3-node/narrow-noarp-interfaces.sh")
+
+    # Physical-link env lives in [global.ns3_env] (every sim models the
+    # same real cable); a protocol's own ns3_env overrides it.
+    ns3_env = {str(k): str(v) for k, v in global_cfg.get("ns3_env", {}).items()}
+    ns3_env.update({str(k): str(v) for k, v in p_config.get("ns3_env", {}).items()})
 
     sim_container = None
     try:
@@ -414,39 +411,39 @@ def run_ns3_simulation(client, protocol, config, timeout, output_dir):
         # so a short `timeout` can't SIGKILL a legitimate first-run build.
         ns3_timeout = max(timeout, 300)
 
-        # ns3_env in config.toml lets a protocol point the sim at the real
-        # testbed's actual known config (link rate/delay, TCP cc/MSS,
-        # iperf3 bitrate, arping probe count...) via env vars the .cc files
-        # read with getenv - never values back-solved from a measurement.
-        ns3_env = {str(k): str(v) for k, v in p_config.get("ns3_env", {}).items()}
+        runs = 1 if deterministic else num_runs
+        for run in range(1, runs + 1):
+            print(f"Run {run}/{runs}...")
 
-        # The simulation is deterministic - one run is the complete
-        # answer, and sim coverage (1/1) stays above min_run_coverage.
-        start_time = time.time()
-        try:
-            code, out = sim_container.exec_run(
-                [
-                    "bash",
-                    "-c",
-                    f"timeout -k 5 {ns3_timeout}s /app/ns-3/run_sim.sh {ns3_script}",
-                ],
-                user="root",
-                environment=ns3_env,
+            start_time = time.time()
+            try:
+                # NS_GLOBAL_VALUE seeds RngRun per run - only meaningful for
+                # stochastic sims, so only passed when deterministic = false.
+                env = {"NS_GLOBAL_VALUE": f"RngRun={run}", **ns3_env}
+                if deterministic:
+                    env = dict(ns3_env)
+                code, out = sim_container.exec_run(
+                    [
+                        "bash",
+                        "-c",
+                        f"timeout -k 5 {ns3_timeout}s /app/ns-3/run_sim.sh {ns3_script}",
+                    ],
+                    user="root",
+                    environment=env,
+                )
+                stdout_text = out.decode("utf-8", errors="ignore")
+            except docker.errors.APIError as e:
+                print(f"  ns-3 run failed: {e}")
+                code, stdout_text = -1, ""
+            if code == 124:
+                print(f"  ns-3 run timed out after {ns3_timeout}s")
+            duration = time.time() - start_time
+
+            res = parse_ns3_output(stdout_text)
+            print(
+                f"  Parsed metrics: {res} (Exit Code: {code}, Duration: {duration:.2f}s)"
             )
-            stdout_text = out.decode("utf-8", errors="ignore")
-        except docker.errors.APIError as e:
-            print(f"  ns-3 run failed: {e}")
-            code, stdout_text = -1, ""
-        if code == 124:
-            print(f"  ns-3 run timed out after {ns3_timeout}s")
-        duration = time.time() - start_time
-        raw_outputs.append(stdout_text)
-
-        res = parse_ns3_output(stdout_text)
-        print(
-            f"  Parsed metrics: {res} (Exit Code: {code}, Duration: {duration:.2f}s)"
-        )
-        metrics_per_run.append(res)
+            metrics_per_run.append(res)
 
     finally:
         if sim_container:
@@ -456,425 +453,11 @@ def run_ns3_simulation(client, protocol, config, timeout, output_dir):
             except Exception:
                 pass
 
-    return metrics_per_run, raw_outputs
-
-
-def calculate_score(z_score, scoring_table):
-    """Calculates score out of 10 based on z-score and scoring table."""
-    sorted_table = sorted(scoring_table, key=lambda x: x[0])
-    for threshold, score in sorted_table:
-        if z_score <= threshold:
-            return score
-    return 0
-
-
-def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run, global_cfg=None):
-    """
-    Scores every metric present in at least `min_run_coverage` fraction of
-    runs on both sides (default 80%, [global] in config.toml); below that
-    it's N/A rather than 0 - a missing measurement isn't a zero one.
-
-    Z-score divides by a pooled std (real+sim) floored at 0.5% of the
-    real-world mean, rather than std_real alone - real-world runs on a
-    localhost docker network have near-zero natural variance, so std_real
-    alone let 4th-decimal-place noise blow up the z-score.
-
-    Returns:
-        dict: {metric_name: {"available": bool, "real": [...], "sim": [...],
-                              "mean_real", "std_real", "mean_sim", "std_sim",
-                              "z_score", "score", "unit", "coverage"}}
-        float or None: overall score (mean of available per-metric scores)
-    """
-    global_cfg = global_cfg or {}
-    min_coverage = global_cfg.get("min_run_coverage", 0.8)
-
-    results = {}
-    for metric_cfg in p_config.get("metrics", []):
-        name = metric_cfg["name"]
-        real_vals = [r[name] for r in real_metrics_per_run if name in r]
-        sim_vals = [s[name] for s in sim_metrics_per_run if name in s]
-
-        n_real = len(real_metrics_per_run)
-        n_sim = len(sim_metrics_per_run)
-        real_coverage = len(real_vals) / n_real if n_real else 0.0
-        sim_coverage = len(sim_vals) / n_sim if n_sim else 0.0
-        coverage_str = f"{len(real_vals)}/{n_real} real, {len(sim_vals)}/{n_sim} sim"
-
-        available = (
-            len(real_vals) > 0
-            and len(sim_vals) > 0
-            and real_coverage >= min_coverage
-            and sim_coverage >= min_coverage
-        )
-
-        if not available:
-            results[name] = {
-                "available": False,
-                "unit": metric_cfg.get("unit", ""),
-                "coverage": coverage_str,
-            }
-            continue
-
-        mean_real = float(np.mean(real_vals))
-        std_real = float(np.std(real_vals))
-        mean_sim = float(np.mean(sim_vals))
-        std_sim = float(np.std(sim_vals))
-
-        if abs(mean_real) < 1e-9 and std_real < 1e-9:
-            # Real-world baseline is a hard, deterministic zero (e.g. 0
-            # retransmits or 0% loss every run) - z-score is undefined here
-            # (dividing by guaranteed-zero variance), and the relative
-            # epsilon floor below degenerates too (0.5% of 0 is 0), which
-            # previously sent z_score into the billions for any nonzero
-            # sim value. Fall back to reading the scoring table directly
-            # in the metric's own unit instead of z-score multiples.
-            z_score = abs(mean_sim - mean_real)
-            z_score_kind = "absolute"  # score isn't from std/overlap at all - see _plot_distribution_overlap
-        else:
-            pooled_std = float(np.sqrt((std_real**2 + std_sim**2) / 2))
-            epsilon_floor = max(1e-9, 0.005 * abs(mean_real))
-            denom = max(pooled_std, epsilon_floor)
-            z_score = abs(mean_sim - mean_real) / denom
-            z_score_kind = "pooled_std"
-
-        score = calculate_score(z_score, metric_cfg["scoring_table"])
-
-        results[name] = {
-            "available": True,
-            "unit": metric_cfg.get("unit", ""),
-            "coverage": coverage_str,
-            "real": real_vals,
-            "sim": sim_vals,
-            "mean_real": mean_real,
-            "std_real": std_real,
-            "z_score_kind": z_score_kind,
-            "mean_sim": mean_sim,
-            "std_sim": std_sim,
-            "z_score": z_score,
-            "score": score,
-            "scoring_table": metric_cfg["scoring_table"],
-            "max_value": metric_cfg.get("max_value"),
-        }
-
-    available_scores = [m["score"] for m in results.values() if m["available"]]
-    overall_score = float(np.mean(available_scores)) if available_scores else None
-    return results, overall_score
-
-
-REAL_COLOR = "#3498db"
-SIM_COLOR = "#2ecc71"
-
-
-def _gaussian_pdf(x, mean, std):
-    std = max(std, 1e-9)
-    return np.exp(-0.5 * ((x - mean) / std) ** 2) / (std * np.sqrt(2 * np.pi))
-
-
-def _plot_spike_comparison(ax, m, max_value):
-    """For the deterministic-zero fallback (see score_metrics): the score
-    came from a bare |mean_sim - mean_real| against the scoring table, not
-    from any std/overlap. Drawing a fabricated bell curve here (std_real is
-    a hard 0 - there's nothing to widen it from) would show an "overlap %"
-    with no relationship to how the score was actually computed - exactly
-    the mismatch that made z=0.13/score=10/10 with "0.1% overlap" look
-    contradictory. Show the two exact values as spikes instead."""
-    mean_r, mean_s = m["mean_real"], m["mean_sim"]
-    span = max(abs(mean_s - mean_r), abs(mean_r), abs(mean_s), 1.0) * 0.3
-    lo, hi = mean_r - span, max(mean_r, mean_s) + span
-    if max_value:
-        lo, hi = max(lo, 0), min(hi, max_value)
-
-    for label, mean, color in [
-        ("Real-World", mean_r, REAL_COLOR),
-        ("ns-3 Sim", mean_s, SIM_COLOR),
-    ]:
-        ax.vlines(mean, 0, 1, color=color, linewidth=3, label=f"{label}: {mean:.3g}")
-        ax.plot(mean, 1, "o", color=color, markersize=8)
-
-    ax.set_xlim(lo, hi)
-    ax.set_ylim(0, 1.15)
-    ax.set_yticks([])
-    ax.text(
-        0.5,
-        1.08,
-        f"|Δ| = {m['z_score']:.3g} {m['unit']} - real baseline is a deterministic\n"
-        "exact value, score reads this off the scoring table directly",
-        transform=ax.transAxes,
-        ha="center",
-        va="bottom",
-        fontsize=8.5,
-    )
-
-
-def _plot_distribution_overlap(ax, m, max_value):
-    """Overlapping N(mean, std) curves for real vs sim - visualizes the same
-    separation the z-score is computed from, instead of a bare boxplot.
-
-    x-range is always data-adaptive (mean +/- 4*std), never forced to the
-    metric's full max_value - a near-ceiling, near-zero-variance metric
-    (e.g. UDP throughput pinned at 10/10 Mbps) would otherwise collapse
-    into an unreadable sliver at the edge of a 0..max_value axis.
-    """
-    if m.get("z_score_kind") == "absolute":
-        _plot_spike_comparison(ax, m, max_value)
-        return
-
-    mean_r, mean_s = m["mean_real"], m["mean_sim"]
-    # Both stds are genuine here (z_score_kind == "pooled_std") - only floor
-    # them so a hard-zero side doesn't collapse the gaussian to a spike.
-    plot_floor = max(abs(mean_r), abs(mean_s), 1.0) * 0.02
-    std_r = max(m["std_real"], plot_floor)
-    std_s = max(m["std_sim"], plot_floor)
-
-    lo = min(mean_r - 4 * std_r, mean_s - 4 * std_s, 0)
-    hi = max(mean_r + 4 * std_r, mean_s + 4 * std_s)
-    if max_value:
-        lo, hi = max(lo, 0), min(hi, max_value)
-    x = np.linspace(lo, hi, 300)
-
-    y_r = _gaussian_pdf(x, mean_r, std_r)
-    y_s = _gaussian_pdf(x, mean_s, std_s)
-
-    # Where the tails visually cross is not the same as how much probability
-    # mass actually overlaps - shade the true overlap (min of the two
-    # curves) so that distinction is visible, not just implied by the
-    # z-score number in the title.
-    overlap = np.minimum(y_r, y_s)
-    overlap_area = np.trapezoid(overlap, x)
-    ax.fill_between(
-        x,
-        overlap,
-        color="#9b59b6",
-        alpha=0.5,
-        label=f"Overlap ≈ {overlap_area:.1%}",
-        zorder=3,
-    )
-
-    for label, mean, std, y, color in [
-        ("Real-World", mean_r, std_r, y_r, REAL_COLOR),
-        ("ns-3 Sim", mean_s, std_s, y_s, SIM_COLOR),
-    ]:
-        ax.plot(x, y, color=color, label=label, linewidth=2)
-        ax.fill_between(x, y, color=color, alpha=0.2)
-        ax.axvline(mean, color=color, linestyle=":", alpha=0.8)
-
-    ax.set_xlim(lo, hi)
-
-
-def _plot_boxplot(ax, m):
-    """Classic boxplot of raw per-run values, real vs sim side by side."""
-    bp = ax.boxplot(
-        [m["real"], m["sim"]],
-        tick_labels=["Real-World", "ns-3 Sim"],
-        patch_artist=True,
-        widths=0.5,
-    )
-    for patch, color in zip(bp["boxes"], [REAL_COLOR, SIM_COLOR]):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.6)
-    ax.grid(axis="y", linestyle="--", alpha=0.6)
-
-
-def generate_report(
-    protocol, p_config, metric_results, overall_score, output_dir, min_run_coverage=0.8
-):
-    """Generates Markdown, JSON reports and one plot file per metric per kind
-    (bar, distribution, boxplot), laid out as:
-      {output_dir}/{protocol}_{timestamp}/report.md
-      {output_dir}/{protocol}_{timestamp}/data.json
-      {output_dir}/{protocol}_{timestamp}/metric/{name}_{bar,dist,box}.png
-    """
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    run_dir = os.path.join(output_dir, f"{protocol}_{timestamp}")
-    metric_dir = os.path.join(run_dir, "metric")
-    os.makedirs(metric_dir, exist_ok=True)
-
-    available = {k: v for k, v in metric_results.items() if v["available"]}
-    unavailable = [k for k, v in metric_results.items() if not v["available"]]
-
-    # 1. Save JSON data
-    data = {
-        "protocol": protocol,
-        "timestamp": timestamp,
-        "metrics": metric_results,
-        "overall_score": overall_score,
-    }
-    json_path = os.path.join(run_dir, "data.json")
-    with open(json_path, "w") as f:
-        json.dump(data, f, indent=4)
-    print(f"Saved raw JSON data to: {json_path}")
-
-    # 2. Save one plot per metric per kind: bar, distribution, boxplot
-    plot_paths = {}  # name -> {"bar":..., "dist":..., "box":...}
-    for name, m in available.items():
-        max_value = m.get("max_value")
-        plot_paths[name] = {}
-
-        fig, ax1 = plt.subplots(figsize=(6, 5.5))
-        bars = ax1.bar(
-            ["Real-World", "ns-3 Sim"],
-            [m["mean_real"], m["mean_sim"]],
-            yerr=[m["std_real"], m["std_sim"]],
-            capsize=10,
-            color=[REAL_COLOR, SIM_COLOR],
-            edgecolor="grey",
-            alpha=0.85,
-        )
-        for bar, mean, std in zip(
-            bars, [m["mean_real"], m["mean_sim"]], [m["std_real"], m["std_sim"]]
-        ):
-            ax1.annotate(
-                f"{mean:.3g} ± {std:.3g}",
-                xy=(bar.get_x() + bar.get_width() / 2, mean + std),
-                xytext=(0, 6),
-                textcoords="offset points",
-                ha="center",
-                fontsize=10,
-            )
-        ax1.set_ylabel(f"{name.capitalize()} ({m['unit']})", fontsize=11)
-        ax1.set_title(
-            f"Mean {name.capitalize()} (score {m['score']}/10)", fontsize=12, pad=14
-        )
-        ax1.grid(axis="y", linestyle="--", alpha=0.6)
-        # 18% headroom above the tallest bar+std+label so the annotation
-        # never collides with the title - was the top-row overlap bug.
-        tallest = max(
-            m["mean_real"] + m["std_real"], m["mean_sim"] + m["std_sim"], 1e-9
-        )
-        top = max_value if max_value else tallest
-        ax1.set_ylim(bottom=0, top=top * 1.18)
-        if max_value:
-            ax1.axhline(max_value, color="grey", linestyle="--", linewidth=1, alpha=0.6)
-        ax1.tick_params(labelsize=10)
-        plt.tight_layout()
-        bar_path = os.path.join(metric_dir, f"{name}_bar.png")
-        plt.savefig(bar_path)
-        plt.close(fig)
-        plot_paths[name]["bar"] = bar_path
-
-        fig, ax2 = plt.subplots(figsize=(6, 5.5))
-        _plot_distribution_overlap(ax2, m, max_value)
-        ax2.set_xlabel(f"{name.capitalize()} ({m['unit']})", fontsize=11)
-        if m.get("z_score_kind") == "absolute":
-            ax2.set_title(f"Exact values (score {m['score']}/10)", fontsize=12)
-        else:
-            ax2.set_ylabel("Density", fontsize=11)
-            ax2.set_title(f"Distribution overlap (z = {m['z_score']:.2f})", fontsize=12)
-        ax2.grid(linestyle="--", alpha=0.6)
-        ax2.legend(fontsize=10)
-        ax2.tick_params(labelsize=10)
-        plt.tight_layout()
-        dist_path = os.path.join(metric_dir, f"{name}_dist.png")
-        plt.savefig(dist_path)
-        plt.close(fig)
-        plot_paths[name]["dist"] = dist_path
-
-        fig, ax3 = plt.subplots(figsize=(6, 5.5))
-        _plot_boxplot(ax3, m)
-        ax3.set_ylabel(f"{name.capitalize()} ({m['unit']})", fontsize=11)
-        ax3.set_title(f"Per-Run Spread: {name.capitalize()}", fontsize=12)
-        ax3.tick_params(labelsize=10)
-        plt.tight_layout()
-        box_path = os.path.join(metric_dir, f"{name}_box.png")
-        plt.savefig(box_path)
-        plt.close(fig)
-        plot_paths[name]["box"] = box_path
-
-    print(f"Saved {3 * len(available)} plots to: {metric_dir}")
-
-    # 3. Save Markdown Report
-    md_path = os.path.join(run_dir, "report.md")
-
-    metrics_table = ""
-    for name, m in metric_results.items():
-        if m["available"]:
-            metrics_table += (
-                f"| {name} | {m['unit']} | {m['mean_real']:.4f} ± {m['std_real']:.4f} | "
-                f"{m['mean_sim']:.4f} ± {m['std_sim']:.4f} | {m['z_score']:.4f} | {m['score']}/10 | {m['coverage']} |\n"
-            )
-        else:
-            metrics_table += (
-                f"| {name} | {m['unit']} | N/A | N/A | N/A | N/A | {m['coverage']} |\n"
-            )
-
-    overall_str = f"{overall_score:.2f}/10" if overall_score is not None else "N/A"
-    min_cov_pct = min_run_coverage * 100
-
-    md_content = f"""# Protocol Evaluation Report: {p_config["name"]}
-
-**Timestamp:** {datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-**Overall Score:** {overall_str}
-
-## Metrics Comparison
-
-A metric is scored only when present in at least {min_cov_pct:.0f}% of
-recorded runs on both the real-world and ns-3 sides; otherwise it's
-reported N/A rather than guessed.
-
-| Metric | Unit | Real-World (mean ± std) | ns-3 Sim (mean ± std) | Z-Score | Score | Coverage |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-{metrics_table}
-"""
-    if unavailable:
-        md_content += f"\n**Not scored (below run-coverage threshold on at least one side):** {', '.join(unavailable)}\n"
-
-    md_content += """
-## Statistical Significance & Scoring
-
-- **Z-Score:** `|mean_sim - mean_real| / max(pooled_std, epsilon_floor)`, where
-  `pooled_std = sqrt((std_real^2 + std_sim^2) / 2)` and
-  `epsilon_floor = max(1e-9, 0.005 * |mean_real|)` - the floor prevents a
-  near-zero real-world std (containers on a localhost network are nearly
-  deterministic) from turning a negligible mean difference into a runaway
-  z-score. When the real-world side is a hard deterministic zero (std_real
-  and mean_real both ~0, e.g. 0 retransmits/0% loss every run), z-score
-  falls back to the raw absolute difference in the metric's own unit,
-  since dividing by a guaranteed-zero variance is undefined and the
-  relative floor above degenerates too (0.5% of 0 is 0).
-- **Overall score:** mean of per-metric scores
-"""
-    for name, m in available.items():
-        md_content += (
-            f"\n### {name} scoring table\n| Max Z-Score | Score |\n| :--- | :--- |\n"
-        )
-        for threshold, scr in sorted(m["scoring_table"], key=lambda x: x[0]):
-            mark = (
-                " (Selected)" if m["z_score"] <= threshold and m["score"] == scr else ""
-            )
-            md_content += f"| $\\le$ {threshold} | {scr}/10{mark} |\n"
-
-    md_content += "\n## Visualization\n"
-    for name in available:
-        rel = {k: os.path.relpath(v, run_dir) for k, v in plot_paths[name].items()}
-        md_content += f"""
-### {name.capitalize()}
-
-![Mean comparison]({rel["bar"]})
-![Distribution overlap]({rel["dist"]})
-![Per-run spread (boxplot)]({rel["box"]})
-"""
-    with open(md_path, "w") as f:
-        f.write(md_content)
-    print(f"Saved Markdown report to: {md_path}")
-
-    print("\n" + "=" * 50)
-    print(f"EVALUATION SUMMARY: {p_config['name']}")
-    print("=" * 50)
-    for name, m in metric_results.items():
-        if m["available"]:
-            print(
-                f"{name}: real {m['mean_real']:.4f} ± {m['std_real']:.4f} {m['unit']} | "
-                f"sim {m['mean_sim']:.4f} ± {m['std_sim']:.4f} {m['unit']} | "
-                f"z={m['z_score']:.4f} | score {m['score']}/10"
-            )
-        else:
-            print(f"{name}: N/A (coverage {m['coverage']}, below threshold)")
-    print(f"Overall Score: {overall_str}")
-    print("=" * 50 + "\n")
+    return metrics_per_run
 
 
 def main():
-    parser = argparse.ArgumentParser(description="ns-3 Conformance Evaluation Bench")
+    parser = argparse.ArgumentParser(description="ns-3 Accuracy Evaluation Bench")
     parser.add_argument("--config", default="config.toml", help="Path to config.toml")
     parser.add_argument(
         "--protocol",
@@ -883,7 +466,7 @@ def main():
     parser.add_argument(
         "--runs",
         type=int,
-        help="Override number of real-world runs (the ns-3 simulation is deterministic and always runs once)",
+        help="Override number of real-world runs (defaults to config's number_of_runs; the ns-3 simulation run count follows its deterministic flag)",
     )
     parser.add_argument("--timeout", type=int, help="Override run timeout (seconds)")
     parser.add_argument(
@@ -925,16 +508,17 @@ def main():
     num_runs = args.runs or config["global"].get("number_of_runs", 5)
     timeout = args.timeout or config["global"].get("timeout", 60)
     output_dir = config["global"].get("output_dir", "./eval_results")
+    deterministic = p_config.get(
+        "deterministic", config["global"].get("deterministic", True)
+    )
 
     client = docker.from_env()
     remote_client = get_remote_docker_client(config["real_world"])
 
-    real_metrics, real_raw = run_real_world(
-        client, remote_client, protocol, config, num_runs, timeout, output_dir
+    real_metrics = run_real_world(
+        client, remote_client, protocol, config, num_runs, timeout
     )
-    sim_metrics, sim_raw = run_ns3_simulation(
-        client, protocol, config, timeout, output_dir
-    )
+    sim_metrics = run_ns3_simulation(client, protocol, config, timeout)
 
     metric_results, overall_score = score_metrics(
         p_config, real_metrics, sim_metrics, config["global"]
@@ -946,6 +530,7 @@ def main():
         overall_score,
         output_dir,
         config["global"].get("min_run_coverage", 0.8),
+        deterministic,
     )
 
 
