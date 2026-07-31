@@ -184,6 +184,7 @@ def parse_arping(stdout_text):
     # Extract loss
     # E.g. Sent 3 probes (1 broadcast(s)), Received 3 response(s)
     # E.g. 5 packets transmitted, 5 packets received, 0% unanswered
+    # E.g. iputils ping: 10 packets transmitted, 10 received, 0% packet loss
     match_tx = re.search(r"Sent\s*(\d+)\s*probes", stdout_text, re.IGNORECASE)
     match_rx = re.search(r"Received\s*(\d+)\s*response", stdout_text, re.IGNORECASE)
     if match_tx and match_rx:
@@ -192,11 +193,22 @@ def parse_arping(stdout_text):
         if tx > 0:
             result["loss"] = ((tx - rx) / tx) * 100.0
     else:
-        match_unans = re.search(
-            r"(\d+(?:\.\d+)?)\%\s*unanswered", stdout_text, re.IGNORECASE
+        # iputils ping statistics line
+        match_ping = re.search(
+            r"(\d+)\s*packets?\s+transmitted.*?(\d+)\s*(?:packets?\s+)?received.*?(\d+(?:\.\d+)?)%\s*packet\s+loss",
+            stdout_text, re.IGNORECASE | re.DOTALL
         )
-        if match_unans:
-            result["loss"] = float(match_unans.group(1))
+        if match_ping:
+            tx = int(match_ping.group(1))
+            rx = int(match_ping.group(2))
+            if tx > 0:
+                result["loss"] = ((tx - rx) / tx) * 100.0
+        else:
+            match_unans = re.search(
+                r"(\d+(?:\.\d+)?)\%\s*unanswered", stdout_text, re.IGNORECASE
+            )
+            if match_unans:
+                result["loss"] = float(match_unans.group(1))
 
     return result
 

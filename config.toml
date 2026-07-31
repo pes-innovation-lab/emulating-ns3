@@ -202,3 +202,46 @@ max_value = 100              # loss is a percentage
 scoring_table = [
     [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]
+
+# ------------------------------------------------------------------
+# Ping - measures ICMP echo RTT on a 1Gbps link. Same ns-3 simulation
+# used for baseline calibration of NS3_LINK_DELAY_US.
+# ------------------------------------------------------------------
+[protocols.ping]
+name = "Ping"
+client_image = "ubuntu:24.04"
+server_image = "ubuntu:24.04"
+client_packages = ["iputils-ping"]
+server_packages = []
+client_cmd = "ping -c 10 10.10.0.1"
+server_cmd = "tail -f /dev/null"
+ns3_script = "sim-ping"
+parser = "arping"
+cleanup_cmds = ["pkill -9 ping"]
+
+[protocols.ping.ns3_env]
+NS3_DATA_RATE = "1Gbps"
+NS3_LINK_DELAY_US = 10
+NS3_PING_COUNT = 10
+
+[[protocols.ping.metrics]]
+name = "latency"
+unit = "ms"
+scoring_table = [
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+]
+
+[[protocols.ping.metrics]]
+name = "jitter"
+unit = "ms"
+scoring_table = [
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+]
+
+[[protocols.ping.metrics]]
+name = "loss"
+unit = "%"
+max_value = 100
+scoring_table = [
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+]
