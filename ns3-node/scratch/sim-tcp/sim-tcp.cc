@@ -15,7 +15,7 @@ using namespace ns3;
 NS_LOG_COMPONENT_DEFINE ("SimTcpEvaluation");
 
 static std::vector<double> g_rttSamplesMs;
-static std::vector<double> g_cwndSamplesKB;
+static double g_cwndMaxKB = 0.0;
 static uint32_t g_retransmitEvents = 0;
 
 void
@@ -27,7 +27,12 @@ RttTracer (Time oldRtt, Time newRtt)
 void
 CwndTracer (uint32_t oldCwnd, uint32_t newCwnd)
 {
-  g_cwndSamplesKB.push_back (newCwnd / 1024.0);
+  // Peak: matches iperf3's TCP_INFO max_snd_cwnd
+  double kb = newCwnd / 1024.0;
+  if (kb > g_cwndMaxKB)
+    {
+      g_cwndMaxKB = kb;
+    }
 }
 
 void
@@ -154,18 +159,11 @@ int main (int argc, char *argv[])
         }
     }
 
-  double cwndMeanKB = 0.0;
-  if (!g_cwndSamplesKB.empty ())
-    {
-      for (double d : g_cwndSamplesKB) cwndMeanKB += d;
-      cwndMeanKB /= g_cwndSamplesKB.size ();
-    }
-
   std::cout << "NS3_METRIC throughput: " << throughputMbps << " Mbps" << std::endl;
   std::cout << "NS3_METRIC latency: " << latencyMs << " ms" << std::endl;
   std::cout << "NS3_METRIC jitter: " << jitterMs << " ms" << std::endl;
   std::cout << "NS3_METRIC retransmits: " << g_retransmitEvents << " count" << std::endl;
-  std::cout << "NS3_METRIC snd_cwnd: " << cwndMeanKB << " KB" << std::endl;
+  std::cout << "NS3_METRIC snd_cwnd: " << g_cwndMaxKB << " KB" << std::endl;
 
   Simulator::Destroy ();
   return 0;
