@@ -81,9 +81,15 @@ def ensure_image(client, image_name):
 
 
 def clean_leftover_processes(container, p_config):
-    """Kills any leftover processes from previous runs inside the container."""
+    """Kills any leftover processes from previous runs inside the container.
+    Swallows transport errors (SSH connection drop, broken pipe) since cleanup
+    is best-effort - the run loop has its own retry logic for actual failures.
+    """
     for cmd in p_config.get("cleanup_cmds", []):
-        container.exec_run(["sh", "-c", cmd], user="root")
+        try:
+            container.exec_run(["sh", "-c", cmd], user="root")
+        except Exception as e:
+            print(f"  Cleanup warning ({cmd}): {e}")
 
 
 def get_remote_docker_client(rw_config):
@@ -290,7 +296,7 @@ def run_real_world(
                 print(f"  Starting server: {server_cmd}")
                 try:
                     server_container.exec_run(server_cmd, detach=True, user="root")
-                except docker.errors.APIError as e:
+                except Exception as e:
                     print(f"  Server command failed to start: {e}")
                 time.sleep(2)  # Wait for server to bind
 
@@ -301,7 +307,7 @@ def run_real_world(
                 try:
                     code, out = client_container.exec_run(timed_client_cmd, user="root")
                     stdout_text = out.decode("utf-8", errors="ignore")
-                except docker.errors.APIError as e:
+                except Exception as e:
                     print(f"  Client command failed to run: {e}")
                     code, stdout_text = -1, ""
                 duration = time.time() - start_time
