@@ -352,8 +352,13 @@ def run_real_world(
                 pass
 
 
-def run_ns3_simulation(client, protocol, config, num_runs, timeout, output_dir):
-    """Runs the ns-3 simulation baseline."""
+def run_ns3_simulation(client, protocol, config, timeout, output_dir):
+    """Runs the ns-3 simulation baseline.
+
+    The sims are deterministic (no random loss/jitter injected), so a
+    single run fully captures the output - repeated runs would be
+    redundant computation.
+    """
     print("\n--- Part 2: Running ns-3 Simulation baseline ---")
     p_config = config["protocols"][protocol]
     ns3_script = p_config["ns3_script"]
@@ -409,36 +414,33 @@ def run_ns3_simulation(client, protocol, config, num_runs, timeout, output_dir):
         # read with getenv - never values back-solved from a measurement.
         ns3_env = {str(k): str(v) for k, v in p_config.get("ns3_env", {}).items()}
 
-        for run in range(1, num_runs + 1):
-            print(f"Run {run}/{num_runs}...")
-
-            start_time = time.time()
-            try:
-                # NS_GLOBAL_VALUE seeds RngRun per run without touching
-                # run_sim.sh, which other callers also use.
-                code, out = sim_container.exec_run(
-                    [
-                        "bash",
-                        "-c",
-                        f"timeout -k 5 {ns3_timeout}s /app/ns-3/run_sim.sh {ns3_script}",
-                    ],
-                    user="root",
-                    environment={"NS_GLOBAL_VALUE": f"RngRun={run}", **ns3_env},
-                )
-                stdout_text = out.decode("utf-8", errors="ignore")
-            except docker.errors.APIError as e:
-                print(f"  ns-3 run failed: {e}")
-                code, stdout_text = -1, ""
-            if code == 124:
-                print(f"  ns-3 run timed out after {ns3_timeout}s")
-            duration = time.time() - start_time
-            raw_outputs.append(stdout_text)
-
-            res = parse_ns3_output(stdout_text)
-            print(
-                f"  Parsed metrics: {res} (Exit Code: {code}, Duration: {duration:.2f}s)"
+        # The simulation is deterministic - one run is the complete
+        # answer, and sim coverage (1/1) stays above min_run_coverage.
+        start_time = time.time()
+        try:
+            code, out = sim_container.exec_run(
+                [
+                    "bash",
+                    "-c",
+                    f"timeout -k 5 {ns3_timeout}s /app/ns-3/run_sim.sh {ns3_script}",
+                ],
+                user="root",
+                environment=ns3_env,
             )
-            metrics_per_run.append(res)
+            stdout_text = out.decode("utf-8", errors="ignore")
+        except docker.errors.APIError as e:
+            print(f"  ns-3 run failed: {e}")
+            code, stdout_text = -1, ""
+        if code == 124:
+            print(f"  ns-3 run timed out after {ns3_timeout}s")
+        duration = time.time() - start_time
+        raw_outputs.append(stdout_text)
+
+        res = parse_ns3_output(stdout_text)
+        print(
+            f"  Parsed metrics: {res} (Exit Code: {code}, Duration: {duration:.2f}s)"
+        )
+        metrics_per_run.append(res)
 
     finally:
         if sim_container:
@@ -872,7 +874,11 @@ def main():
         "--protocol",
         help="Protocol to evaluate (must be a key under [protocols] in config.toml)",
     )
-    parser.add_argument("--runs", type=int, help="Override number of runs")
+    parser.add_argument(
+        "--runs",
+        type=int,
+        help="Override number of real-world runs (the ns-3 simulation is deterministic and always runs once)",
+    )
     parser.add_argument("--timeout", type=int, help="Override run timeout (seconds)")
     parser.add_argument(
         "--check",
@@ -921,7 +927,7 @@ def main():
         client, remote_client, protocol, config, num_runs, timeout, output_dir
     )
     sim_metrics, sim_raw = run_ns3_simulation(
-        client, protocol, config, num_runs, timeout, output_dir
+        client, protocol, config, timeout, output_dir
     )
 
     metric_results, overall_score = score_metrics(

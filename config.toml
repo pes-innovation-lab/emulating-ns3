@@ -8,6 +8,8 @@
 # min_run_coverage fraction of runs on both the real-world and ns-3 sides
 
 [global]
+# Real-world baseline runs are repeated this many times to capture its
+# variance; the ns-3 simulation is deterministic and always runs once.
 number_of_runs = 5
 timeout = 60
 output_dir = "./eval_results"
