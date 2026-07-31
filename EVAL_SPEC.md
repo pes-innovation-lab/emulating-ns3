@@ -33,11 +33,15 @@ x = |μ_sim − μ_real| / max(σ_real, ε)
 ```
 
 x is read against a configurable scoring table (default
-`[0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]`) to
-produce the score out of 10. When σ_real = 0 the denominator falls back to ε,
-so the score is graded ("within real-world resolution") rather than a binary
-pass/fail. The scoring table, tolerance, run counts, and the deterministic
-flag are all user-modifiable in `config.toml`.
+`[1.0, 10], [1.28, 9], [1.645, 8], [1.96, 7], [2.33, 6], [2.576, 5],
+[3.0, 4], [3.29, 3], [3.72, 2], [4.27, 1]`) to produce the score out of 10.
+x is a z-score of μ_sim against the real distribution (p = 2Φ(−x)
+two-sided), so the thresholds sit on canonical confidence intervals of the
+real mean: 1σ (68%) → 10 up to 99.999% (4.27σ) → 1, beyond → 0. When
+σ_real = 0 the denominator falls back to ε, keeping this reading in
+resolution units instead of a binary pass/fail. The scoring table,
+tolerance, run counts, and the deterministic flag are all user-modifiable
+in `config.toml`.
 
 ## Format:
 

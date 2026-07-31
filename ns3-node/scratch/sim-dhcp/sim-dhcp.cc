@@ -15,9 +15,8 @@ bool g_leaseObtained = false;
 double g_leaseTimeMs = -1.0;
 
 void LeaseObtainedCallback(const Ipv4Address &address) {
-  // NewLease can fire more than once within the run (renewal/rebind) -
-  // record only the first lease and defer printing until after Run() so
-  // a later renewal can't silently overwrite/duplicate the metric line.
+  // NewLease can fire more than once (renewal/rebind) - record only the
+  // first lease and print after Run(), so a renewal can't overwrite it.
   if (g_leaseObtained) {
     return;
   }
@@ -33,10 +32,8 @@ int main(int argc, char *argv[]) {
   nodes.Create(2); // Node 0: Server, Node 1: Client
 
   CsmaHelper csma;
-  // Physical link: 1Gbps NIC-to-NIC, direct macvlan on a short Ethernet run
-  // by default - override via NS3_DATA_RATE/NS3_LINK_DELAY_US in
-  // config.toml if the real link's actual rating/propagation delay is
-  // known.
+  // Default: 1Gbps NIC-to-NIC macvlan run; override via NS3_DATA_RATE/
+  // NS3_LINK_DELAY_US in config.toml if the real link's rating/delay is known.
   csma.SetChannelAttribute("DataRate", StringValue(GetEnvStr("NS3_DATA_RATE", "1Gbps")));
   csma.SetChannelAttribute("Delay", TimeValue(MicroSeconds(GetEnvDouble("NS3_LINK_DELAY_US", 10.0))));
 
@@ -46,24 +43,16 @@ int main(int argc, char *argv[]) {
   InternetStackHelper stack;
   stack.Install(nodes);
 
-  // Configure DHCP Server on Node 0
   Ipv4AddressHelper address;
   address.SetBase("10.10.0.0", "255.255.255.0");
   Ipv4InterfaceContainer interfaces =
       address.Assign(devices.Get(0)); // server IP is 10.10.0.1
 
   DhcpHelper dhcpHelper;
-  // Default "Collect" (offer-collection wait before REQUEST) is 5s. Single
-  // DHCP server here, nothing to wait to collect, so keep this minimal
-  // instead of letting it dominate measured latency.
+  // Default "Collect" (offer-collection wait before REQUEST) is 5s; with a
+  // single server there's nothing to collect, so keep it minimal.
   dhcpHelper.SetClientAttribute(
       "Collect", TimeValue(MicroSeconds(GetEnvDouble("NS3_DHCP_COLLECT_US", 100.0))));
-  // Server parameters:
-  // - NetDevice on server
-  // - Server IP address
-  // - Pool subnet/mask
-  // - Min pool IP
-  // - Max pool IP
   ApplicationContainer serverApp = dhcpHelper.InstallDhcpServer(
       devices.Get(0), interfaces.GetAddress(0), Ipv4Address("10.10.0.0"),
       Ipv4Mask("255.255.255.0"), Ipv4Address("10.10.0.10"),
@@ -72,12 +61,10 @@ int main(int argc, char *argv[]) {
   serverApp.Start(Seconds(0.0));
   serverApp.Stop(stopTime);
 
-  // Configure DHCP Client on Node 1
   ApplicationContainer clientApp = dhcpHelper.InstallDhcpClient(devices.Get(1));
   clientApp.Start(Seconds(g_startTimeMs / 1000.0));
   clientApp.Stop(stopTime);
 
-  // Connect the trace
   Ptr<DhcpClient> client = DynamicCast<DhcpClient>(clientApp.Get(0));
   client->TraceConnectWithoutContext("NewLease",
                                      MakeCallback(&LeaseObtainedCallback));

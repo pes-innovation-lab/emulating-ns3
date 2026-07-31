@@ -18,13 +18,11 @@ using namespace ns3;
 
 NS_LOG_COMPONENT_DEFINE("SimArpEvaluation");
 
-// arping (-c N) bypasses the OS ARP cache and sends a genuine request on
-// every probe; ns-3's IP stack caches the resolution after the first one.
-// Flushing the cache before each probe (see FlushArpCache) is what makes
-// the remaining probes trigger real ARP exchanges too, so latency/jitter/
-// loss are measured the same way arping measures them: across N
-// independent resolutions in a single run, not one. N defaults to 5
-// override via NS3_ARP_PROBE_COUNT if the real invocation differs.
+// arping (-c N) bypasses the OS ARP cache and sends a genuine request per
+// probe; ns-3's stack caches the resolution after the first one. Flushing
+// the cache before each probe (FlushArpCache) makes every probe trigger a
+// real ARP exchange, so latency/jitter/loss match arping's semantics: N
+// independent resolutions per run. N defaults to 5 (NS3_ARP_PROBE_COUNT).
 
 double g_arpRequestTimeMs = -1.0;
 std::vector<double> g_rttSamplesMs;
@@ -86,10 +84,8 @@ int main(int argc, char *argv[]) {
   uint32_t kProbeCount = GetEnvUint("NS3_ARP_PROBE_COUNT", 5);
 
   CsmaHelper csma;
-  // Physical link: 1Gbps NIC-to-NIC, direct macvlan on a short Ethernet run
-  // by default - override via NS3_DATA_RATE/NS3_LINK_DELAY_US in
-  // config.toml if the real link's actual rating/propagation delay is
-  // known.
+  // Default: 1Gbps NIC-to-NIC macvlan run; override via NS3_DATA_RATE/
+  // NS3_LINK_DELAY_US in config.toml if the real link's rating/delay is known.
   csma.SetChannelAttribute("DataRate", StringValue(GetEnvStr("NS3_DATA_RATE", "1Gbps")));
   csma.SetChannelAttribute("Delay", TimeValue(MicroSeconds(GetEnvDouble("NS3_LINK_DELAY_US", 10.0))));
 
@@ -103,14 +99,14 @@ int main(int argc, char *argv[]) {
   address.SetBase("10.10.0.0", "255.255.255.0");
   Ipv4InterfaceContainer interfaces = address.Assign(devices);
 
-  // Connect sniffer traces to Client's device (Node 1, device 0)
+  // Sniff traces on Client's device (Node 1, device 0)
   Ptr<NetDevice> clientDev = devices.Get(1);
   clientDev->TraceConnectWithoutContext("MacTx", MakeCallback(&SniffTx));
   clientDev->TraceConnectWithoutContext("MacRx", MakeCallback(&SniffRx));
 
-  // kProbeCount independent ARP resolutions, one per ping: flush the
-  // client's cached entry just before each so the ping can't reuse a
-  // prior resolution, then send exactly one echo (Count=1).
+  // kProbeCount independent ARP resolutions: flush the client's cached entry
+  // just before each ping so it can't reuse a prior resolution, then send
+  // exactly one echo (Count=1).
   PingHelper ping(interfaces.GetAddress(0));
   ping.SetAttribute("VerboseMode", EnumValue(Ping::SILENT));
   ping.SetAttribute("Count", UintegerValue(1));

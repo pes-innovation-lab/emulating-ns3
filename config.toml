@@ -1,40 +1,32 @@
 # Configuration for the Protocol Evaluation Bench
 #
-# Adding a protocol requires:
-# - point `parser` at a function in parsers.PARSERS
-# - list `cleanup_cmds` to kill leftover processes between runs
-# - declare a `metrics` table per metric to score.
-# A metric is only scored if it's declared here and present in at least
-# min_run_coverage fraction of runs on both the real-world and ns-3 sides.
+# Adding a protocol requires: point `parser` at a function in parsers.PARSERS,
+# list `cleanup_cmds`, and declare a `metrics` table per metric to score.
+# A metric is scored only if declared here and present in >= min_run_coverage
+# of runs on both the real-world and ns-3 sides.
 
 [global]
-# Real-world baseline runs are repeated this many times to capture its
-# variance (recommended 20-30; below 10 the std estimate is too noisy to
-# trust, a warning is printed). The ns-3 simulation runs once when
-# deterministic, `number_of_runs` times otherwise.
+# Real-world baseline runs are repeated to capture variance (20-30 recommended;
+# below 10 the std estimate is too noisy, a warning is printed). The ns-3
+# simulation runs once when deterministic, `number_of_runs` times otherwise.
 number_of_runs = 20
 timeout = 60
 output_dir = "./eval_results"
 min_run_coverage = 0.8
 
-# ns-3 build profile for the simulation container ("optimized" or "debug").
-# The bench has always run optimized; the docker-compose dev setup uses debug.
+# ns-3 build profile ("optimized" or "debug"); the bench has always run
+# optimized, the docker-compose dev setup uses debug.
 ns3_build_profile = "optimized"
 
-# Scoring: x = |mu_sim - mu_real| / max(sigma_real, epsilon), where
-# epsilon = max(tolerance_abs, tolerance_ratio * |mu_real|) keeps the
-# denominator well-defined when the real side measures deterministic or
-# near-deterministic. tolerance_ratio is the minimum relative spread we
-# credit the real world with; high values (>= 0.05) make scores less
-# meaningful and trigger a warning. The score is read off `scoring_table`
-# below (per-metric overrides allowed).
+# Scoring: x = |mu_sim - mu_real| / max(sigma_real, epsilon) with
+# epsilon = max(tolerance_abs, tolerance_ratio * |mu_real|) keeping the
+# denominator well-defined for deterministic/near-deterministic real sides.
+# tolerance_ratio >= 0.05 makes scores less meaningful and triggers a warning.
 tolerance_ratio = 0.005
 tolerance_abs = 1e-9
 
-# Sims are deterministic by default: no random elements, so one run is the
-# complete answer. Set `deterministic = false` on a protocol whose sim has
-# its own stochasticity (it then runs `number_of_runs` times and is scored
-# on its mean).
+# Sims are deterministic by default (one run is the complete answer); set
+# `deterministic = false` on a protocol whose sim has its own stochasticity.
 deterministic = true
 
 # Default scoring table, applied to every metric unless the metric's own
@@ -44,9 +36,8 @@ scoring_table = [
     [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
 ]
 
-# Environment shared by every ns-3 simulation: the physical point-to-point
-# link all sims model is the same real cable, so these belong here, not in
-# each protocol's ns3_env. A protocol may still override either key.
+# Env shared by every ns-3 sim: the physical point-to-point link all sims
+# model is the same real cable. A protocol may still override either key.
 [global.ns3_env]
 NS3_DATA_RATE = "1Gbps"       # physical link rate; set to the real link's actual rating
 NS3_LINK_DELAY_US = 10        # physical propagation delay; set to the real cable's actual value
@@ -70,12 +61,10 @@ ns3_script = "sim-tcp"
 parser = "iperf3"
 cleanup_cmds = ["kill -9 $(pidof iperf3) 2>/dev/null || true"]
 
-# Passed as env vars into the ns-3 container (sim-tcp.cc reads them via
-# getenv, see ns3-node/scratch/sim-common/env-config.h). Defaults below
-# match the .cc's built-in behavior - fill in the real testbed's actual
-# known config (e.g. `sysctl net.ipv4.tcp_congestion_control`, real MSS/
-# buffer sizes) to make the sim faithful to the real setup. The physical
-# link params (NS3_DATA_RATE/NS3_LINK_DELAY_US) live in [global.ns3_env].
+# Env vars passed into the ns-3 container (sim-tcp.cc reads them via getenv,
+# see ns3-node/scratch/sim-common/env-config.h). Fill in the real testbed's
+# actual known config (tcp_congestion_control, MSS, buffer sizes) to make the
+# sim faithful; link params live in [global.ns3_env].
 [protocols.tcp.ns3_env]
 NS3_TCP_DURATION_S = 5        # matches client_cmd's -t 5
 # NS3_TCP_CC = "ns3::TcpCubic"        # uncomment + set to match real host's tcp_congestion_control
@@ -176,7 +165,6 @@ ns3_script = "sim-arp"
 parser = "arping"
 cleanup_cmds = ["pkill -9 arping"]
 
-# NS3_ARP_PROBE_COUNT matches client_cmd's -c 5.
 [protocols.arp.ns3_env]
 NS3_ARP_PROBE_COUNT = 5        # matches client_cmd's -c 5
 
@@ -193,10 +181,8 @@ name = "loss"
 unit = "%"
 max_value = 100              # loss is a percentage
 
-# ------------------------------------------------------------------
-# Ping - measures ICMP echo RTT on a 1Gbps link. Same ns-3 simulation
-# used for baseline calibration of NS3_LINK_DELAY_US.
-# ------------------------------------------------------------------
+# Ping - measures ICMP echo RTT on a 1Gbps link; also used for baseline
+# calibration of NS3_LINK_DELAY_US.
 [protocols.ping]
 name = "Ping"
 client_image = "ubuntu:24.04"

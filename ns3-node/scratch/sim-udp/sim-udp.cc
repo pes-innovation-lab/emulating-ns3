@@ -50,9 +50,8 @@ int main (int argc, char *argv[])
   nodes.Create (2);
 
   PointToPointHelper pointToPoint;
-  // Physical link: 1Gbps NIC-to-NIC, direct macvlan on a short Ethernet run
-  // by default - override via NS3_DATA_RATE/NS3_LINK_DELAY_US in config.toml
-  // if the real link's actual rating/propagation delay is known.
+  // Default: 1Gbps NIC-to-NIC macvlan run; override via NS3_DATA_RATE/
+  // NS3_LINK_DELAY_US in config.toml if the real link's rating/delay is known.
   pointToPoint.SetDeviceAttribute ("DataRate", StringValue (GetEnvStr ("NS3_DATA_RATE", "1Gbps")));
   pointToPoint.SetChannelAttribute (
       "Delay", TimeValue (MicroSeconds (GetEnvDouble ("NS3_LINK_DELAY_US", 10.0))));
@@ -76,10 +75,8 @@ int main (int argc, char *argv[])
   sinkApp.Start (Seconds (0.0));
   sinkApp.Stop (Seconds (durationS + 1.0));
 
-  // Client: OnOffApplication on Node 1 (10.10.0.2) sending to Node 0 (10.10.0.1).
-  // Bitrate/packet size default to matching this bench's own iperf3 -b/-u
-  // invocation (config.toml's client_cmd) - override via NS3_UDP_BITRATE_MBPS/
-  // NS3_UDP_PACKET_SIZE if the real command line differs.
+  // Client: OnOffApplication on Node 1 (10.10.0.2) -> Node 0 (10.10.0.1).
+  // Defaults match config.toml's client_cmd (-b 10M, 1472B UDP payload).
   std::string udpDataRate = GetEnvStr ("NS3_UDP_BITRATE_MBPS", "10") + "Mbps";
   uint32_t udpPacketSize = (uint32_t) GetEnvDouble ("NS3_UDP_PACKET_SIZE", 1472);
   OnOffHelper onOffHelper ("ns3::UdpSocketFactory", InetSocketAddress (interfaces.GetAddress (0), port));
@@ -99,7 +96,6 @@ int main (int argc, char *argv[])
   Simulator::Stop (Seconds (durationS + 1.0));
   Simulator::Run ();
 
-  // Calculate throughput
   uint64_t totalBytesReceived = sink->GetTotalRx ();
   double throughputMbps = (totalBytesReceived * 8.0) / (durationS * 1e6);
 

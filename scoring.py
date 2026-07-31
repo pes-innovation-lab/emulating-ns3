@@ -79,18 +79,9 @@ def warn_run_count(n_real):
 
 
 def score_metrics(p_config, real_metrics_per_run, sim_metrics_per_run, global_cfg=None):
-    """
-    Scores every metric present in at least `min_run_coverage` fraction of
-    runs on both sides (default 80%, [global] in config.toml); below that
-    it's N/A rather than 0 - a missing measurement isn't a zero one.
-
-    Returns:
-        dict: {metric_name: {"available": bool, "real": [...], "sim": [...],
-                              "mean_real", "std_real", "mean_sim", "std_sim",
-                              "epsilon_used", "x", "score", "unit", "coverage",
-                              "scoring_table", "max_value"}}
-        float or None: overall score (mean of available per-metric scores)
-    """
+    """Scores every metric present in >= min_run_coverage of runs on both
+    sides (default 80%); below that it's N/A rather than 0 - a missing
+    measurement isn't a zero one. Returns (results, overall_score)."""
     global_cfg = global_cfg or {}
     min_coverage = global_cfg.get("min_run_coverage", 0.8)
     warn_config(global_cfg)

@@ -4,19 +4,13 @@ import re
 
 def parse_iperf3(stdout_text):
     """
-    Parses iperf3 output (both TCP and UDP).
-    Tries to parse as JSON first (if -J flag was used),
-    then falls back to regex parser.
-    Only returns keys that were actually found in the output -
-    a metric absent from the output is left out of the dict entirely,
-    never defaulted to 0.0 (0.0 can be a real measured value).
-    Returns:
-        dict: subset of {'throughput': float, 'latency': float, 'jitter': float,
-                          'loss': float, 'retransmits': float, 'snd_cwnd': float}
+    Parses iperf3 output (TCP and UDP). JSON first (if -J), regex fallback.
+    Only returns keys actually found - absent metrics are left out, never
+    defaulted to 0.0 (0.0 can be a real measured value).
     """
     result = {}
 
-    # Try parsing as JSON first
+    # JSON branch
     try:
         data = json.loads(stdout_text)
         if "end" in data:
@@ -25,13 +19,9 @@ def parse_iperf3(stdout_text):
                 result["throughput"] = (
                     end["sum_received"].get("bits_per_second", 0.0) / 1e6
                 )
-                # TCP_INFO per-stream stats (Linux kernel only). iperf3's
-                # actual field names are mean_rtt/min_rtt/max_rtt (usec) and
-                # max_snd_cwnd (bytes), not rtt/rttvar/snd_cwnd - verified
-                # against real iperf3 3.16 -J output. There's no rttvar
-                # field in this schema at all, so jitter uses max_rtt -
-                # min_rtt (the observed RTT spread) as the closest available
-                # proxy instead.
+                # TCP_INFO field names (mean_rtt/min_rtt/max_rtt, max_snd_cwnd)
+                # verified against iperf3 3.16 -J; no rttvar field exists, so
+                # jitter = max_rtt - min_rtt as the closest proxy.
                 streams = end.get("streams", [])
                 if streams and "sender" in streams[0]:
                     sender = streams[0]["sender"]
@@ -98,16 +88,10 @@ def parse_iperf3(stdout_text):
 
 def parse_perfdhcp(stdout_text):
     """
-    Parses perfdhcp output (DISCOVER-OFFER section: sent/received/drops,
-    avg delay). Requires client_cmd to pass -r<rate> -p<period> -W<wait_us>
-    (see config.toml) - without -W, perfdhcp's report/exit races the actual
-    reply arrival and every exchange reads as dropped even though the
-    socket-level recvmsg succeeds (confirmed via strace: real OFFER payload
-    received, xid/chaddr matching, but still counted as 0 received). -r/-p
-    additionally bound the run instead of relying on -n, which was observed
-    to be ignored once -W is set.
-    Returns:
-        dict: subset of {'latency': float, 'loss': float}
+    Parses perfdhcp output (avg delay, sent/drops). client_cmd must pass
+    -r/-p/-W: without -W, perfdhcp's report races reply arrival and every
+    exchange reads as dropped despite the reply actually arriving; -r/-p
+    bound the run since -n is ignored once -W is set.
     """
     result = {}
 
@@ -128,17 +112,11 @@ def parse_perfdhcp(stdout_text):
 
 
 def parse_arping(stdout_text):
-    """
-    Parses arping output.
-    Returns:
-        dict: subset of {'latency': float, 'jitter': float, 'loss': float}
-    """
+    """Parses arping output (also handles iputils ping statistics)."""
     result = {}
 
-    # Try parsing summary line (works for both iputils and habets):
-    # E.g. iputils: rtt min/avg/max/mdev = 0.490/0.604/0.812/0.147 ms
-    # E.g. habets:  rtt min/avg/max/std-dev = 0.098/0.115/0.150/0.021 ms
-    # E.g. habets:  rtt min/avg/max/std-dev = 98.000/115.000/150.000/21.000 usec
+    # Summary line covers both arping variants (iputils mdev / habets std-dev,
+    # ms or usec) - e.g. "rtt min/avg/max/mdev = 0.490/0.604/0.812/0.147 ms".
     match_summary = re.search(
         r"rtt min/avg/max/(?:mdev|std-dev)\s*=\s*"
         r"[\d\.]+/([\d\.]+)/[\d\.]+/([\d\.]+)\s*([a-zA-Z\xb5\xc2]+)",
@@ -152,13 +130,9 @@ def parse_arping(stdout_text):
             avg /= 1000.0
             mdev /= 1000.0
         result["latency"] = avg
-        # mdev/std-dev is arping's own measured RTT variation across its
-        # probes in this run - the direct jitter equivalent.
-        result["jitter"] = mdev
+        result["jitter"] = mdev  # mdev/std-dev is RTT variation across probes
     else:
-        # Fallback: Parse individual lines and derive mean + stddev
-        # E.g. Unicast reply from 10.10.0.1 [00:00:00:00:00:01]  0.812ms
-        # E.g. 60 bytes from 00:00:00:00:00:01 (10.10.0.1): index=0 time=115.000 usec
+        # Fallback: per-reply lines -> derive mean + stddev
         replies = re.findall(
             r"(?:reply from.*?|time=)\s*([\d\.]+)\s*(ms|usec|\xb5s|\xc2\xb5s|second|sec)",
             stdout_text,
@@ -181,10 +155,8 @@ def parse_arping(stdout_text):
                     variance = sum((r - mean) ** 2 for r in rtts) / len(rtts)
                     result["jitter"] = variance**0.5
 
-    # Extract loss
-    # E.g. Sent 3 probes (1 broadcast(s)), Received 3 response(s)
-    # E.g. 5 packets transmitted, 5 packets received, 0% unanswered
-    # E.g. iputils ping: 10 packets transmitted, 10 received, 0% packet loss
+    # Loss: arping "Sent X probes, Received Y response(s)", iputils ping
+    # "X packets transmitted, Y received, Z% packet loss", or "Z% unanswered".
     match_tx = re.search(r"Sent\s*(\d+)\s*probes", stdout_text, re.IGNORECASE)
     match_rx = re.search(r"Received\s*(\d+)\s*response", stdout_text, re.IGNORECASE)
     if match_tx and match_rx:
@@ -193,7 +165,6 @@ def parse_arping(stdout_text):
         if tx > 0:
             result["loss"] = ((tx - rx) / tx) * 100.0
     else:
-        # iputils ping statistics line
         match_ping = re.search(
             r"(\d+)\s*packets?\s+transmitted.*?(\d+)\s*(?:packets?\s+)?received.*?(\d+(?:\.\d+)?)%\s*packet\s+loss",
             stdout_text, re.IGNORECASE | re.DOTALL
@@ -214,24 +185,14 @@ def parse_arping(stdout_text):
 
 
 def parse_ns3_output(stdout_text):
-    """
-    Parses output from ns-3 simulation scripts.
-    ns-3 scripts print parser-friendly lines:
-    NS3_METRIC throughput: 94.5 Mbps
-    NS3_METRIC latency: 1.25 ms
-    NS3_METRIC jitter: 0.12 ms
-    NS3_METRIC loss: 0.0 %
-    Only metrics actually printed are returned - a metric a given
-    sim script doesn't emit is left out, not defaulted to 0.0.
-    """
+    """Parses "NS3_METRIC <name>: <value> [unit]" lines from sim scripts.
+    Only metrics actually printed are returned."""
     result = {}
     for line in stdout_text.split("\n"):
         if "NS3_METRIC" in line:
-            # C++'s default double formatting (std::cout) switches to
-            # scientific notation for very small/large magnitudes (e.g.
-            # "9.09495e-13" for a near-zero jitter/variance floating-point
-            # residual) - without the exponent group, "9.09495e-13" parsed
-            # as 9.09495, a ~1e12x inflation of an effectively-zero value.
+            # std::cout switches to scientific notation for tiny values
+            # (e.g. "9.09495e-13"); without the exponent group it parses as
+            # 9.09495, a ~1e12x inflation of an effectively-zero value.
             match = re.search(
                 r"NS3_METRIC\s+(\w+):\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\s*([a-zA-Z%]+)?",
                 line,
@@ -241,9 +202,8 @@ def parse_ns3_output(stdout_text):
     return result
 
 
-# Registry of real-world traffic-generator parsers, selected by the
-# `parser` key in config.toml. The ns-3 side always uses parse_ns3_output
-# directly (its output format is fixed by the bench, not user-configurable).
+# Real-world traffic-generator parsers, selected by `parser` in config.toml;
+# the ns-3 side always uses parse_ns3_output directly.
 PARSERS = {
     "iperf3": parse_iperf3,
     "perfdhcp": parse_perfdhcp,

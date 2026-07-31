@@ -33,7 +33,7 @@ def generate_report(
     available = {k: v for k, v in metric_results.items() if v["available"]}
     unavailable = [k for k, v in metric_results.items() if not v["available"]]
 
-    # 1. JSON data
+    # JSON data
     data = {
         "protocol": protocol,
         "timestamp": timestamp,
@@ -46,7 +46,7 @@ def generate_report(
         json.dump(data, f, indent=4)
     print(f"Saved raw JSON data to: {json_path}")
 
-    # 2. Plots: one scorecard + three images per available metric
+    # Plots: scorecard + two images per available metric
     plot_paths = {}
     for name, m in available.items():
         subdir = os.path.join(metric_dir, name)
@@ -67,7 +67,7 @@ def generate_report(
     plot_overview(overview_path, p_config["name"], metric_results)
     print(f"Saved {1 + 2 * len(available)} plots to: {run_dir}")
 
-    # 3. Markdown report
+    # Markdown report
     md_path = os.path.join(run_dir, "report.md")
 
     metrics_table = ""

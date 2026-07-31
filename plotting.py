@@ -1,17 +1,12 @@
 """Plotting for the Protocol Evaluation Bench.
 
-Three plot types, one clear image each:
-
-- `normal_distribution.png` (per metric): the real world drawn as a normal
-  distribution, with the simulation's output plotted on top of it - a
-  point-bar for a deterministic sim (the answer to "where does the sim
-  value lie on the real distribution"), a second gaussian for a stochastic
-  one. The tolerance band [mu_real - epsilon, mu_real + epsilon] is shaded
-  gray: inside it, the sim is indistinguishable from the real mean.
-- `strip.png` (per metric): raw per-run values as individual dots, so every
-  measurement is visible rather than hidden inside a summary box.
-- `overview.png` (per protocol run): scorecard - one bar per metric, colored
-  by band, with the x value annotated.
+- `normal_distribution.png` (per metric): real world as a normal curve with
+  the sim's output on it (point-bar if deterministic, second gaussian if
+  stochastic); the tolerance band [mu_real ± epsilon] is shaded gray - inside
+  it the sim is indistinguishable from the real mean.
+- `strip.png` (per metric): raw per-run values as dots.
+- `overview.png` (per protocol run): scorecard, one bar per metric colored by
+  band with x annotated.
 """
 
 import numpy as np
@@ -54,12 +49,10 @@ def _x_reading(m):
 
 
 def plot_normal_distribution(path, m, deterministic):
-    """Real world as a normal curve, with the sim's position on it.
-
-    When sigma_real < epsilon the measured curve would be invisible, so it
-    is drawn at epsilon width with a footnote - the score is still computed
-    against max(sigma_real, epsilon) as documented.
-    """
+    """Real world as a normal curve with the sim's position on it. If
+    sigma_real < epsilon the measured curve would be invisible, so it's drawn
+    at epsilon width with a footnote (the score still uses max(sigma_real,
+    epsilon))."""
     mean_r, std_r = m["mean_real"], m["std_real"]
     epsilon, x, score = m["epsilon_used"], m["x"], m["score"]
     sim, std_s = m["mean_sim"], m["std_sim"]

@@ -33,11 +33,10 @@ CwndTracer (uint32_t oldCwnd, uint32_t newCwnd)
 void
 CongStateTracer (TcpSocketState::TcpCongState_t oldState, TcpSocketState::TcpCongState_t newState)
 {
-  // ns-3 has no direct per-segment retransmit counter to match iperf3's
-  // TCP_INFO retransmits. Entering CA_LOSS/CA_RECOVERY is the socket
-  // detecting loss and retransmitting to recover from it, so counting
-  // those transitions is a retransmission-episode proxy, not a literal
-  // segment-level retransmit count.
+  // ns-3 has no per-segment retransmit counter matching iperf3's TCP_INFO
+  // retransmits; CA_LOSS/CA_RECOVERY entry is the socket detecting loss and
+  // retransmitting, so counting those transitions is a retransmit-episode
+  // proxy, not a literal segment count.
   if (newState == TcpSocketState::CA_LOSS || newState == TcpSocketState::CA_RECOVERY)
     {
       g_retransmitEvents++;
@@ -47,9 +46,8 @@ CongStateTracer (TcpSocketState::TcpCongState_t oldState, TcpSocketState::TcpCon
 void
 ConnectTcpTraces (uint32_t nodeId)
 {
-  // BulkSend's socket doesn't exist until StartApplication runs, so this
-  // is scheduled to fire just after Start() instead of connecting before
-  // Run() - the wildcard path only matches sockets that already exist.
+  // BulkSend's socket doesn't exist until StartApplication runs, so connect
+  // just after Start() - the wildcard path only matches existing sockets.
   std::string base = "/NodeList/" + std::to_string (nodeId) + "/$ns3::TcpL4Protocol/SocketList/*/";
   Config::ConnectWithoutContext (base + "RTT", MakeCallback (&RttTracer));
   Config::ConnectWithoutContext (base + "CongestionWindow", MakeCallback (&CwndTracer));
@@ -63,9 +61,8 @@ int main (int argc, char *argv[])
 
   Time::SetResolution (Time::NS);
 
-  // TCP stack config: matches ns-3 defaults unless config.toml's ns3_env
-  // sets these to the real testbed's actual sysctl/socket values (cc
-  // algorithm, MSS, buffers, initial cwnd).
+  // Matches ns-3 defaults unless config.toml's ns3_env sets these to the
+  // real testbed's sysctl/socket values (cc algorithm, MSS, buffers, initcwnd).
   std::string tcpCc = GetEnvStr ("NS3_TCP_CC", "");
   if (!tcpCc.empty ())
     {
@@ -98,9 +95,8 @@ int main (int argc, char *argv[])
   nodes.Create (2);
 
   PointToPointHelper pointToPoint;
-  // Physical link: 1Gbps NIC-to-NIC, direct macvlan on a short Ethernet run
-  // by default - override via NS3_DATA_RATE/NS3_LINK_DELAY_US in config.toml
-  // if the real link's actual rating/propagation delay is known.
+  // Default: 1Gbps NIC-to-NIC macvlan run; override via NS3_DATA_RATE/
+  // NS3_LINK_DELAY_US in config.toml if the real link's rating/delay is known.
   pointToPoint.SetDeviceAttribute ("DataRate", StringValue (GetEnvStr ("NS3_DATA_RATE", "1Gbps")));
   pointToPoint.SetChannelAttribute (
       "Delay", TimeValue (MicroSeconds (GetEnvDouble ("NS3_LINK_DELAY_US", 10.0))));
@@ -124,8 +120,7 @@ int main (int argc, char *argv[])
   sinkApp.Start (Seconds (0.0));
   sinkApp.Stop (Seconds (durationS + 1.0));
 
-  // Client: BulkSend on Node 1 (10.10.0.2)
-  // Send to server (10.10.0.1)
+  // Client: BulkSend on Node 1 (10.10.0.2) -> server (10.10.0.1)
   AddressValue remoteAddress (InetSocketAddress (interfaces.GetAddress (0), port));
   BulkSendHelper sourceHelper ("ns3::TcpSocketFactory", Address ());
   sourceHelper.SetAttribute ("Remote", remoteAddress);
@@ -140,7 +135,6 @@ int main (int argc, char *argv[])
   Simulator::Stop (Seconds (durationS + 1.0));
   Simulator::Run ();
 
-  // Calculate throughput
   Ptr<PacketSink> sink = DynamicCast<PacketSink> (sinkApp.Get (0));
   uint64_t totalBytesReceived = sink->GetTotalRx ();
   double throughputMbps = (totalBytesReceived * 8.0) / (durationS * 1e6);

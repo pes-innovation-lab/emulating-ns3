@@ -25,10 +25,8 @@ from scoring import score_metrics
 
 
 def run_pre_install_cmds(container, cmds, label):
-    """
-    Runs arbitrary shell commands inside a container before package
-    installation.
-    """
+    """Runs arbitrary shell commands inside a container before package
+    installation."""
     for cmd in cmds:
         print(f"Running pre-install command inside {label} container: {cmd}")
         code, out = container.exec_run(["bash", "-c", cmd], user="root")
@@ -37,11 +35,10 @@ def run_pre_install_cmds(container, cmds, label):
 
 
 def provision_container(container, p_config, side):
-    """Adds any vendor repos and installs packages inside one container (server or client).
+    """Adds vendor repos and installs packages inside one container.
 
-    Raises RuntimeError on apt-get failure instead of continuing silently -
-    a missing traffic-generator binary would otherwise fail every run and
-    get absorbed as a silent N/A instead of a clear setup error.
+    Raises RuntimeError on apt-get failure - a missing binary would otherwise
+    fail every run and get absorbed as a silent N/A instead of a setup error.
     """
     label = side
     pre_install_cmds = p_config.get(f"{side}_pre_install_cmds", [])
@@ -75,10 +72,8 @@ def ensure_image(client, image_name):
 
 
 def clean_leftover_processes(container, p_config):
-    """Kills any leftover processes from previous runs inside the container.
-    Swallows transport errors (SSH connection drop, broken pipe) since cleanup
-    is best-effort - the run loop has its own retry logic for actual failures.
-    """
+    """Kills leftover processes from previous runs; transport errors are
+    swallowed (cleanup is best-effort, the run loop retries real failures)."""
     for cmd in p_config.get("cleanup_cmds", []):
         try:
             container.exec_run(["sh", "-c", cmd], user="root")
@@ -244,10 +239,8 @@ def run_real_world(client, remote_client, protocol, config, num_runs, timeout):
         )
         client_container.start()
 
-        # Server/client provisioning is independent - run concurrently instead
-        # of paying apt-get's update+install latency twice, back to back.
-        # Containers start on the default bridge network (for apt-get's
-        # internet access); provisioning uses that.
+        # Provision both sides concurrently (containers still on the bridge
+        # network, which is what apt-get's internet access uses).
         with ThreadPoolExecutor(max_workers=2) as pool:
             list(
                 pool.map(
@@ -280,8 +273,8 @@ def run_real_world(client, remote_client, protocol, config, num_runs, timeout):
             code, stdout_text, duration = -1, "", 0.0
             max_attempts = 3
             for attempt in range(1, max_attempts + 1):
-                # server_cmd is often one-shot (e.g. `iperf3 -s -1`) - restart
-                # it every attempt, not just once, or retries hit a dead server.
+                # server_cmd is often one-shot (iperf3 -s -1) - restart it per
+                # attempt or retries hit a dead server.
                 if attempt > 1:
                     clean_leftover_processes(server_container, p_config)
                     clean_leftover_processes(client_container, p_config)
@@ -315,8 +308,8 @@ def run_real_world(client, remote_client, protocol, config, num_runs, timeout):
                 print(
                     f"  Run {run} FAILED after {max_attempts} attempts (last exit code {code})"
                 )
-                # Discard rather than parse - partial output can still match
-                # a metric's regex and pollute the mean with a bogus value.
+                # Discard partial output - a truncated run can still match a
+                # metric's regex and pollute the mean with a bogus value.
                 stdout_text = ""
 
             res = parser_fn(stdout_text) if code == 0 else {}
@@ -350,12 +343,9 @@ def run_real_world(client, remote_client, protocol, config, num_runs, timeout):
 
 
 def run_ns3_simulation(client, protocol, config, timeout):
-    """Runs the ns-3 simulation baseline.
-
-    A deterministic sim (the default) has no random elements, so a single
-    run is the complete answer. A protocol with `deterministic = false`
-    runs `number_of_runs` times and is scored on its mean.
-    """
+    """Runs the ns-3 simulation baseline. A deterministic sim (the default)
+    runs once; one with `deterministic = false` runs `number_of_runs` times
+    and is scored on its mean."""
     print("\n--- Part 2: Running ns-3 Simulation baseline ---")
     p_config = config["protocols"][protocol]
     global_cfg = config["global"]
@@ -380,8 +370,7 @@ def run_ns3_simulation(client, protocol, config, timeout):
     run_sim_script = os.path.abspath("./ns3-node/run_sim.sh")
     narrow_script = os.path.abspath("./ns3-node/narrow-noarp-interfaces.sh")
 
-    # Physical-link env lives in [global.ns3_env] (every sim models the
-    # same real cable); a protocol's own ns3_env overrides it.
+    # Physical-link env lives in [global.ns3_env]; protocol ns3_env overrides.
     ns3_env = {str(k): str(v) for k, v in global_cfg.get("ns3_env", {}).items()}
     ns3_env.update({str(k): str(v) for k, v in p_config.get("ns3_env", {}).items()})
 
@@ -406,9 +395,9 @@ def run_ns3_simulation(client, protocol, config, timeout):
 
         time.sleep(1)
 
-        # run_sim.sh reconfigures with --enable-examples --enable-tests every
-        # call, forcing a full rebuild on a fresh container - give it a floor
-        # so a short `timeout` can't SIGKILL a legitimate first-run build.
+        # run_sim.sh reconfigures with --enable-examples --enable-tests each
+        # call, forcing a full rebuild on a fresh container - floor the
+        # timeout so a short one can't SIGKILL a legitimate first-run build.
         ns3_timeout = max(timeout, 300)
 
         runs = 1 if deterministic else num_runs
@@ -417,8 +406,8 @@ def run_ns3_simulation(client, protocol, config, timeout):
 
             start_time = time.time()
             try:
-                # NS_GLOBAL_VALUE seeds RngRun per run - only meaningful for
-                # stochastic sims, so only passed when deterministic = false.
+                # RngRun only matters for stochastic sims, so only pass it
+                # when deterministic = false.
                 env = {"NS_GLOBAL_VALUE": f"RngRun={run}", **ns3_env}
                 if deterministic:
                     env = dict(ns3_env)
