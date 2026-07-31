@@ -5,15 +5,51 @@
 # - list `cleanup_cmds` to kill leftover processes between runs
 # - declare a `metrics` table per metric to score.
 # A metric is only scored if it's declared here and present in at least
-# min_run_coverage fraction of runs on both the real-world and ns-3 sides
+# min_run_coverage fraction of runs on both the real-world and ns-3 sides.
 
 [global]
 # Real-world baseline runs are repeated this many times to capture its
-# variance; the ns-3 simulation is deterministic and always runs once.
-number_of_runs = 5
+# variance (recommended 20-30; below 10 the std estimate is too noisy to
+# trust, a warning is printed). The ns-3 simulation runs once when
+# deterministic, `number_of_runs` times otherwise.
+number_of_runs = 20
 timeout = 60
 output_dir = "./eval_results"
 min_run_coverage = 0.8
+
+# ns-3 build profile for the simulation container ("optimized" or "debug").
+# The bench has always run optimized; the docker-compose dev setup uses debug.
+ns3_build_profile = "optimized"
+
+# Scoring: x = |mu_sim - mu_real| / max(sigma_real, epsilon), where
+# epsilon = max(tolerance_abs, tolerance_ratio * |mu_real|) keeps the
+# denominator well-defined when the real side measures deterministic or
+# near-deterministic. tolerance_ratio is the minimum relative spread we
+# credit the real world with; high values (>= 0.05) make scores less
+# meaningful and trigger a warning. The score is read off `scoring_table`
+# below (per-metric overrides allowed).
+tolerance_ratio = 0.005
+tolerance_abs = 1e-9
+
+# Sims are deterministic by default: no random elements, so one run is the
+# complete answer. Set `deterministic = false` on a protocol whose sim has
+# its own stochasticity (it then runs `number_of_runs` times and is scored
+# on its mean).
+deterministic = true
+
+# Default scoring table, applied to every metric unless the metric's own
+# `scoring_table` overrides it. Bands are thresholds on x, the distance of
+# the sim from the real mean in real-world spread units.
+scoring_table = [
+    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+]
+
+# Environment shared by every ns-3 simulation: the physical point-to-point
+# link all sims model is the same real cable, so these belong here, not in
+# each protocol's ns3_env. A protocol may still override either key.
+[global.ns3_env]
+NS3_DATA_RATE = "1Gbps"       # physical link rate; set to the real link's actual rating
+NS3_LINK_DELAY_US = 10        # physical propagation delay; set to the real cable's actual value
 
 # Real-world baseline runs over a physical Ethernet link
 [real_world]
@@ -38,10 +74,9 @@ cleanup_cmds = ["kill -9 $(pidof iperf3) 2>/dev/null || true"]
 # getenv, see ns3-node/scratch/sim-common/env-config.h). Defaults below
 # match the .cc's built-in behavior - fill in the real testbed's actual
 # known config (e.g. `sysctl net.ipv4.tcp_congestion_control`, real MSS/
-# buffer sizes) to make the sim faithful to the real setup.
+# buffer sizes) to make the sim faithful to the real setup. The physical
+# link params (NS3_DATA_RATE/NS3_LINK_DELAY_US) live in [global.ns3_env].
 [protocols.tcp.ns3_env]
-NS3_DATA_RATE = "1Gbps"       # physical link rate; set to the real link's actual rating
-NS3_LINK_DELAY_US = 10        # physical propagation delay; set to the real cable's actual value
 NS3_TCP_DURATION_S = 5        # matches client_cmd's -t 5
 # NS3_TCP_CC = "ns3::TcpCubic"        # uncomment + set to match real host's tcp_congestion_control
 # NS3_TCP_SEGMENT_SIZE = 1448         # uncomment + set to match real host's MSS
@@ -53,37 +88,22 @@ NS3_TCP_DURATION_S = 5        # matches client_cmd's -t 5
 name = "throughput"
 unit = "Mbps"
 max_value = 1000            # physical link capacity (1Gbps)
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.tcp.metrics]]
 name = "latency"
 unit = "ms"
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.tcp.metrics]]
 name = "jitter"
 unit = "ms"
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.tcp.metrics]]
 name = "retransmits"
 unit = "count"
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.tcp.metrics]]
 name = "snd_cwnd"
 unit = "KB"
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [protocols.udp]
 name = "UDP"
@@ -97,8 +117,6 @@ cleanup_cmds = ["kill -9 $(pidof iperf3) 2>/dev/null || true"]
 
 # Defaults here mirror client_cmd's own -b/-t/packet size.
 [protocols.udp.ns3_env]
-NS3_DATA_RATE = "1Gbps"        # physical link rate; set to the real link's actual rating
-NS3_LINK_DELAY_US = 10         # physical propagation delay; set to the real cable's actual value
 NS3_UDP_BITRATE_MBPS = 10      # matches client_cmd's -b 10M
 NS3_UDP_PACKET_SIZE = 1472     # matches iperf3's default UDP payload (1500 MTU - 20 IP - 8 UDP)
 NS3_UDP_DURATION_S = 5         # matches client_cmd's -t 5
@@ -107,24 +125,15 @@ NS3_UDP_DURATION_S = 5         # matches client_cmd's -t 5
 name = "throughput"
 unit = "Mbps"
 max_value = 10               # the ceiling this test can hit
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.udp.metrics]]
 name = "jitter"
 unit = "ms"
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.udp.metrics]]
 name = "loss"
 unit = "%"
 max_value = 100              # loss is a percentage
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [protocols.dhcp]
 name = "DHCP"
@@ -144,24 +153,16 @@ parser = "perfdhcp"
 cleanup_cmds = ["pkill -9 dnsmasq", "pkill -9 perfdhcp"]
 
 [protocols.dhcp.ns3_env]
-NS3_DATA_RATE = "1Gbps"        # physical link rate; set to the real link's actual rating
-NS3_LINK_DELAY_US = 10         # physical propagation delay; set to the real cable's actual value
 NS3_DHCP_COLLECT_US = 100      # offer-collection wait before REQUEST; ns-3 default is 5s, set here to 100us since there's a single DHCP server
 
 [[protocols.dhcp.metrics]]
 name = "latency"
 unit = "ms"
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.dhcp.metrics]]
 name = "loss"
 unit = "%"
 max_value = 100              # loss is a percentage
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [protocols.arp]
 name = "ARP"
@@ -177,31 +178,20 @@ cleanup_cmds = ["pkill -9 arping"]
 
 # NS3_ARP_PROBE_COUNT matches client_cmd's -c 5.
 [protocols.arp.ns3_env]
-NS3_DATA_RATE = "1Gbps"        # physical link rate; set to the real link's actual rating
-NS3_LINK_DELAY_US = 10         # physical propagation delay; set to the real cable's actual value
 NS3_ARP_PROBE_COUNT = 5        # matches client_cmd's -c 5
 
 [[protocols.arp.metrics]]
 name = "latency"
 unit = "ms"
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.arp.metrics]]
 name = "jitter"
 unit = "ms"
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.arp.metrics]]
 name = "loss"
 unit = "%"
 max_value = 100              # loss is a percentage
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 # ------------------------------------------------------------------
 # Ping - measures ICMP echo RTT on a 1Gbps link. Same ns-3 simulation
@@ -220,28 +210,17 @@ parser = "arping"
 cleanup_cmds = ["pkill -9 ping"]
 
 [protocols.ping.ns3_env]
-NS3_DATA_RATE = "1Gbps"
-NS3_LINK_DELAY_US = 10
 NS3_PING_COUNT = 10
 
 [[protocols.ping.metrics]]
 name = "latency"
 unit = "ms"
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.ping.metrics]]
 name = "jitter"
 unit = "ms"
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
 
 [[protocols.ping.metrics]]
 name = "loss"
 unit = "%"
 max_value = 100
-scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
-]
