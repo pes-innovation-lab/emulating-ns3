@@ -29,11 +29,13 @@ tolerance_abs = 1e-9
 # `deterministic = false` on a protocol whose sim has its own stochasticity.
 deterministic = true
 
-# Default scoring table, applied to every metric unless the metric's own
-# `scoring_table` overrides it. Bands are thresholds on x, the distance of
-# the sim from the real mean in real-world spread units.
+# Default scoring table, applied unless a metric overrides it. Bands are
+# thresholds on x; since x is a z-score they sit on canonical two-sided
+# confidence intervals: 1 sigma (68%) -> 10 ... 4.27 sigma (99.999%) -> 1,
+# beyond -> 0.
 scoring_table = [
-    [0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]
+    [1.0, 10], [1.28, 9], [1.645, 8], [1.96, 7], [2.33, 6],
+    [2.576, 5], [3.0, 4], [3.29, 3], [3.72, 2], [4.27, 1]
 ]
 
 # Env shared by every ns-3 sim: the physical point-to-point link all sims

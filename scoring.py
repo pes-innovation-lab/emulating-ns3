@@ -18,14 +18,20 @@ import numpy as np
 
 DEFAULT_TOLERANCE_RATIO = 0.005
 DEFAULT_TOLERANCE_ABS = 1e-9
+# x is a z-score of mu_sim against the real distribution (p = 2*Phi(-x));
+# thresholds sit on canonical two-sided confidence intervals of the real
+# mean: 1 sigma (68%) up to 99.999% (4.27), beyond which x -> score 0.
 DEFAULT_SCORING_TABLE = [
-    [0.5, 10],
-    [1.0, 9],
-    [1.5, 8],
-    [2.0, 7],
-    [3.0, 5],
-    [5.0, 3],
-    [10.0, 1],
+    [1.0, 10],
+    [1.28, 9],
+    [1.645, 8],
+    [1.96, 7],
+    [2.33, 6],
+    [2.576, 5],
+    [3.0, 4],
+    [3.29, 3],
+    [3.72, 2],
+    [4.27, 1],
 ]
 # Above this ratio the floor dominates the denominator for most metrics and
 # scores stop discriminating - warn the user rather than silently comply.
