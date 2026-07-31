@@ -1,32 +1,50 @@
-We create an evaluation bench to identify the standard deviations of a given protocol implementation in ns-3 that conforms to the real world implementation. The bench is of 2 parts:-
+We create an evaluation bench to measure how far a given protocol's ns-3
+implementation sits from the real-world implementation, scoring it out of 10.
+The bench has 2 parts:-
 
-### First part: 
-2 containers where 2 applications communicate with each other, and logs metrics, according to the preferred testing applications for each protocol:-
-- ccperf and iperf3 for TCP, UDP
+### First part:
+2 containers where 2 applications communicate with each other, and log metrics, according to the preferred testing applications for each protocol:-
+- iperf3 for TCP, UDP
 - perfdhcp for DHCP
 - arping for ARP
+- ping for Ping
 
 The two containers sit on two physically separate machines, joined by a real
 Ethernet cable, not a same-host veth pair - see
 [Real-World Link Setup](#real-world-link-setup) for how to wire this up.
 
-### Second Part: 
+### Second Part:
 
 2 nodes inside ns-3 that simulate the exact same exchanges by the 2 applications inside the simulation. The same metrics as the first part are logged.
 
-From the collected logs, we come up with standard deviations for which it is an acceptable simulation. The final standard deviations are then noted down in a table. This standard deviation is used to score the protocol implementation out of 10.
-
 ### Scoring:
 
-This scoring of the implementation should be modifiable according to the user when they perform their own testing.
+The real-world side is characterized as a distribution N(μ_real, σ_real) from
+its repeated runs. The simulation side is either a point mass at its single
+output (`deterministic = true`) or its own N(μ_sim, σ_sim) (`deterministic =
+false`). Both are scored with one formula - the standardized distance of the
+sim's center from the real center, in real-world spread units (Glass's Δ),
+with a configurable base tolerance (ε) that keeps the denominator well-defined
+when the real side measures deterministic or near-deterministic:
 
-This scoring is then used to score implementations like in refactor/base, where the testing happens between ns-3 node and the real application containers.
+```
+ε = max(tolerance_abs, tolerance_ratio · |μ_real|)
+x = |μ_sim − μ_real| / max(σ_real, ε)
+```
+
+x is read against a configurable scoring table (default
+`[0.5, 10], [1.0, 9], [1.5, 8], [2.0, 7], [3.0, 5], [5.0, 3], [10.0, 1]`) to
+produce the score out of 10. When σ_real = 0 the denominator falls back to ε,
+so the score is graded ("within real-world resolution") rather than a binary
+pass/fail. The scoring table, tolerance, run counts, and the deterministic
+flag are all user-modifiable in `config.toml`.
 
 ## Format:
 
 A `config.toml` file that contains:-
 - protocol
-- scoring for std deviation
+- scoring table for the standardized distance x
+- tolerance (base resolution) and deterministic flag
 - container (path/oci)
 - timeout
 - number of runs
@@ -34,12 +52,12 @@ A `config.toml` file that contains:-
 - corresponding ns-3 script to run
 
 A python script that:-
-- reads the conig.toml
+- reads the config.toml
 - spins up the applications
 - runs ns-3 simulation
 - extracts performance metrics and establish baseline
-- compare and get score
-- give output and diff.
+- compares and scores
+- gives output and diff.
 
 ## Real-World Link Setup
 
@@ -78,7 +96,7 @@ passwordless auth already working, SSH user in the `docker` group (or root).
 reachable, both NICs exist, SSH reachable. Fix failures here before a
 real run, or a bad NIC/host name surfaces only after `apt-get update`.
 
-**Calibration**: `sim-*.cc` channel delay/loss constants are calibrated
+**Calibration**: `sim-*.cc` channel delay constants are calibrated
 against a veth pair, not a real cable - re-measure RTT
 (`ping`/`arping` between the macvlan IPs) and recalibrate. Doesn't fix
 the [Known Modeling Gaps](#known-modeling-gaps) below - orthogonal.
@@ -96,13 +114,6 @@ Not blockers, but each limits how far a score can be trusted at face value.
   fix (non-saturating traffic pattern, or a link capacity closer to what
   the real veth pair can actually sustain).
 
-- **ARP jitter is architecturally ~0 in sim.** `sim-arp.cc` draws one
-  channel delay per *run*, shared by all 5 probes in that run, so
-  intra-run RTT samples are numerically near-identical and the computed
-  jitter is just floating-point noise (~1e-13ms). Real arping's mdev
-  reflects genuine per-probe timing variation. Fixing this means drawing
-  delay per-probe, not per-run - not yet done.
-
 - **DHCP latency models link delay + a hand-tuned `Collect` wait (100us),
   not real server processing time.** Real-world latency is dominated by
   dnsmasq's own processing (lease allocation, DB write, etc.), which isn't
@@ -116,12 +127,13 @@ Not blockers, but each limits how far a score can be trusted at face value.
   the real veth latency could differ, and scores would quietly drift
   without an obvious signal pointing at the channel delay as the cause.
 
-- **UDP loss rate (0.1%, `sim-udp.cc`) is an arbitrary hand-picked
-  constant**, not derived from real measured loss (which is ~0% on this
-  testbed - a local veth pair rarely drops packets). Any nonzero rate is
-  definitionally a discrepancy against a genuinely-zero real baseline;
-  it's kept low specifically to stay within scoring tolerance rather than
-  model anything real.
+- **The sims are deterministic by design** (`deterministic = true` in
+  config.toml): with no injected error models, a single run is the whole
+  answer. Any metric whose real side is also deterministic (σ_real = 0)
+  is scored against the tolerance ε rather than a measured spread - a sim
+  that misses a deterministic real value by more than the tolerance scores
+  zero. This is the deliberate "pure comparison" stance: no artificial
+  loss/jitter is injected to manufacture variance.
 
 - **ns-3's TCP congestion control algorithm isn't explicitly matched to
   the real host's.** A captured real iperf3 JSON reported
@@ -137,12 +149,6 @@ Not blockers, but each limits how far a score can be trusted at face value.
   would actually see - the whole bench's conclusions are scoped to "does
   this simulation match an idle local link," not "does it match a real
   network."
-
-- **ccperf (named in this spec for TCP/UDP) isn't integrated.** It's a
-  congestion-control benchmarking framework with no real-world
-  counterpart and DB-based output, not stdout - it doesn't fit this
-  bench's real-vs-sim scoring model. See the commented-out clone step in
-  `ns3-node/Dockerfile` if this is revisited as a separate, unscored tool.
 
 - **iperf3 TCP_INFO field names are version-dependent and unverified
   beyond this session's captured version (3.16).** `mean_rtt`/`min_rtt`/
